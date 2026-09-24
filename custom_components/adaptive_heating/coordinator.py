@@ -15,6 +15,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import DEFAULTS, DOMAIN, MODES
+from .disinfection import DEFAULTS as DHW_DEFAULTS
+from .disinfection_controller import DisinfectionController
 from .engine import Energy, Model, Settings, decide, finite, limited_output, power_watts, surplus_available, temperature
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +27,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         super().__init__(hass, _LOGGER, name=DOMAIN, config_entry=entry, update_interval=timedelta(minutes=5))
         self.entry = entry
         self.releases = releases
-        self.config = DEFAULTS | dict(entry.data) | dict(entry.options)
+        self.config = DEFAULTS | DHW_DEFAULTS | dict(entry.data) | dict(entry.options)
         self.settings = Settings(**{k: self.config[k] for k in Settings.__dataclass_fields__ if k in self.config})
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self.model = Model()
@@ -44,6 +46,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.forecast_cache = []
         self.events = []
         self.started = dt_util.utcnow()
+        self.disinfection = DisinfectionController(self)
+        self.shutting_down = False
 
     def identity(self):
         keys = ("indoor_entity", "outdoor_entity", "weather_entity", "output_entity", "inlet_entity", "outlet_entity", "operating_entity", "heating_state")
@@ -58,6 +62,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
             if target is not None and 10 <= target <= 30 and data.get("configured_target") == self.config["target"]:
                 self.settings.target = target
         # Observe on every restart/reconfiguration, regardless of stored mode.
+        await self.disinfection.async_load()
 
     async def async_save(self):
         await self.store.async_save({"identity": self.identity(), "model": asdict(self.model), "target": self.settings.target,
@@ -123,6 +128,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 flag = self.fresh_state(key, now)
                 if flag is None or flag.state != "off":
                     reason = f"{label} active or unavailable"
+        if self.disinfection.blocks_heating:
+            reason = "Tank disinfection or target restoration in progress; space heating and learning paused"
         if inlet is not None and not 0 <= inlet <= 85:
             water = None
         if outlet is not None and not 0 <= outlet <= 85:
@@ -182,6 +189,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
             else:
                 self.surplus_since = None
             sustained = self.surplus_since is not None and (now - self.surplus_since).total_seconds() >= 900
+            await self.disinfection.async_tick()
+            snapshot = self.snapshot(dt_util.utcnow())
             if snapshot["output"] is not None:
                 output = snapshot["output"]
                 if self.last_seen_output is not None and abs(output - self.last_seen_output) > 0.05:
@@ -195,11 +204,12 @@ class HeatingCoordinator(DataUpdateCoordinator):
                         self.manual_hold = True
                         self.pending_deadline = None
                 self.last_seen_output = output
-            if snapshot["indoor"] is not None:
+            if snapshot["indoor"] is not None and not snapshot["blocked"]:
                 self.model.observe(self.previous, snapshot, eligible=snapshot["eligible"] and self.mode != "off")
                 self.previous = snapshot
             else:
                 self.previous = None
+                self.model.emitter = None
             result = {"status": "observing", "reason": "Collecting measurements", "proposed": None,
                       "limited": None, "commanded": self.last_commanded, "actual": snapshot["output"],
                       "prediction": None, "indoor": snapshot["indoor"], "outdoor": snapshot["outdoor"],
@@ -259,7 +269,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         # All external awaits happen before a fresh final gate. Mode changes can
         # stop writes even if an earlier forecast request was still in flight.
         fresh = self.snapshot(dt_util.utcnow())
-        if self.mode != "automatic" or self.releases.restart_pending or fresh["blocked"]:
+        if self.shutting_down or self.mode != "automatic" or self.releases.restart_pending or fresh["blocked"]:
             result.update(status="paused", reason=fresh["blocked"] or "Automatic control disabled")
             return
         if fresh["output"] is None or abs(fresh["output"] - observed) > 0.05:
@@ -304,3 +314,46 @@ class HeatingCoordinator(DataUpdateCoordinator):
             self.settings.target = round(target, 1)
             await self.async_save()
         await self.async_request_refresh()
+
+    async def async_disinfection_tick(self, _event=None):
+        async with self.lock:
+            await self.disinfection.async_tick()
+        self.async_update_listeners()
+
+    async def async_disinfection_mode(self, mode):
+        if mode not in MODES:
+            raise HomeAssistantError("Invalid disinfection mode")
+        if mode == "automatic" and (self.shutting_down or self.releases.restart_pending):
+            raise HomeAssistantError("Restart or reload must finish before enabling disinfection")
+        if mode != "automatic":
+            self.disinfection.mode = mode
+        async with self.lock:
+            self.disinfection.mode = mode
+            await self.disinfection.async_tick()
+        self.async_update_listeners()
+
+    async def async_disinfection_run(self):
+        async with self.lock:
+            if self.shutting_down:
+                raise HomeAssistantError("Controller is unloading")
+            await self.disinfection.async_start()
+        self.async_update_listeners()
+
+    async def async_disinfection_cancel(self):
+        async with self.lock:
+            await self.disinfection.async_cancel()
+        self.async_update_listeners()
+
+    async def async_prepare_unload(self):
+        self.shutting_down = True
+        self.mode = self.disinfection.mode = "off"
+        async with self.lock:
+            if self.disinfection.cycle and self.disinfection.cycle["phase"] not in ("restoring", "recovery_required"):
+                await self.disinfection.abort("interrupted", "Controller unloading; restoring normal tank target")
+            await self.disinfection.async_tick()
+        # Keep listeners alive if restoration still needs acknowledgment/retry.
+        if self.disinfection.blocks_heating:
+            self.shutting_down = False
+            self.async_update_listeners()
+            return False
+        return True

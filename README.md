@@ -4,31 +4,34 @@ An experimental Home Assistant custom integration for predictive heat-pump water
 temperature control. It uses existing Home Assistant entities from any compatible
 device integration. Each installation owns its settings and learned response.
 
-**0.1.0 is an initial development build.** The recorded validation baseline is 59
-passing tests, including controller, adapter and installer tests, plus
-platform-import and setup-form smoke checks against Home Assistant 2026.7.4.
-See the [validation record](docs/HISTORY.md#validation-evidence) for environments
-and the latest local run. Loading the complete integration in an isolated
-Home Assistant instance and observing real heating behavior are still required
-before relying on Automatic mode. The first live installation is now loaded on
-Home Assistant 2026.7.4 in Observe mode, with the heating dashboard migrated.
-Real heating-cycle validation and Automatic cutover remain pending.
+**0.2.0 is an experimental development build.** The current suite has 81 passing
+tests against Home Assistant 2026.7.4, including isolated setup, options/reload,
+entity creation and unload/restoration with simulated device services. See the
+[validation record](docs/HISTORY.md#validation-evidence). The first house still
+runs 0.1.0 in Observe; loading 0.2.0, configuring the tank entities and observing
+a real disinfection cycle remain deployment steps. No real tank cycle has been
+started by this rewrite. Automatic heating field validation also remains pending.
 
 ## Origins and project status
 
 This is a rewrite of the original house-specific PyScript heating controller into
 a reusable integration. The original heating `0.3.2` and companion water
 disinfection `1.0.0` scripts are preserved in [the legacy archive](legacy/README.md).
-Integration `0.1.0` starts its own version series. The rewrite includes behavior
-changes; hot-water disinfection remains separate and is not part of the package.
+Integration `0.1.0` started its own version series. Version **0.2.0** adds optional
+tank disinfection using the normal tank setpoint, with a continuous measured hold,
+recovery journal, and shared heating/solar scheduling inputs. The rewrite includes
+behavior changes; see the [disinfection guide](docs/DISINFECTION.md).
 
 - [Timeline, completed work and next milestones](docs/HISTORY.md)
 - [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
 - [Original source, dependencies and preservation checksums](legacy/README.md)
 - [Dashboard layout, reuse and rollback](docs/DASHBOARD.md)
+- [Disinfection setup, scheduling and recovery](docs/DISINFECTION.md)
 
 ## What this build includes
 
+- Optional tank disinfection with independent Observe/Automatic/Off, continuous
+  temperature hold, bounded timeout/restoration, and persistent cycle history.
 - UI entity selectors and editable options, with no house-specific IDs in code.
 - Observe (default), Automatic, and Off modes; an integration-owned room target.
 - Weather compensation, room feedback, and a bounded predictive correction from
@@ -48,7 +51,7 @@ changes; hot-water disinfection remains separate and is not part of the package.
   handling or source copying.
 
 This build does **not** calculate COP, infer flow from pump speed, operate battery
-charging settings, or manage domestic-hot-water disinfection. Measured electrical
+charging settings, or invoke native heat-pump disinfection modes. Measured electrical
 power/energy is exposed for evaluation; the controller does not yet fit an
 electricity-consumption model or optimize prices. The predictive objective uses
 water temperature as an efficiency proxy, not a claim of measured savings.
@@ -84,7 +87,7 @@ has a fixed three-hour lag; estimating the lag automatically is future work.
 
 The integration controls a water-temperature number, **not a compressor power
 switch**. Off means stop automatic writes; it does not turn off the heat pump.
-Hot-water, defrost, off or unknown operating states prevent writes. A configured
+Hot-water, defrost, off or unknown operating states prevent space-heating writes. A configured
 inhibit input also blocks writes when on or unavailable. Map the existing
 controller's enable flag to this input during migration.
 
@@ -131,7 +134,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    python3 scripts/build_release.py
    ```
 
-   This produces `dist/adaptive_heating-0.1.0.zip` and its checksum. GitHub's
+   This produces `dist/adaptive_heating-0.2.0.zip` and its checksum. GitHub's
    **Code → Download ZIP** is the project source and must be extracted and built;
    it is not the installable component archive.
 
@@ -139,7 +142,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    configuration directory. From the project directory, validate the archive:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.1.0.zip --config /config --check
+   python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config --check
    ```
 
    `/config` must be the target house's HA configuration directory as seen from
@@ -151,7 +154,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
 3. Install when ready:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.1.0.zip --config /config
+   python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config
    ```
 
    Alternatively extract the archive's `adaptive_heating` folder into
@@ -232,8 +235,8 @@ is needed. Missing/invalid measurements or a sampling gap reset qualification.
 
 ## Manual updates
 
-If you installed through HACS, use HACS for subsequent downloads/updates. Select
-Observe before downloading, restart Home Assistant afterward, then check operation
+If you installed through HACS, use HACS for subsequent downloads/updates. Cancel any tank cycle and wait for confirmed normal-target restoration. Select
+Observe in both control modes before downloading, restart Home Assistant afterward, then check operation
 before re-enabling Automatic. HACS handles file replacement itself and does not
 run this project's installer or its pre-install Observe transition. Its downloads
 also do not create this project's `.adaptive_heating_backups` code copies. Keep
@@ -269,10 +272,10 @@ Core tests require only Python's standard library:
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/build_release.py
-python3 scripts/install.py dist/adaptive_heating-0.1.0.zip --config /config --check
+python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config --check
 ```
 
-For the two real-HA import/schema smoke checks, create a separate Python 3.14
+For the real-HA import/schema and isolated lifecycle checks, create a separate Python 3.14
 virtual environment and install `requirements-dev.txt`, then run the same test
 command with that environment's Python. Those tests are explicitly skipped when
 HA is absent. The adapter tests use in-memory fake services and never contact

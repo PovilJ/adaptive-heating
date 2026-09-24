@@ -8,7 +8,7 @@ replaced. This directory is historical reference, not an installation package.
 | Snapshot | Version declared in the file | Relationship to the new integration |
 | --- | --- | --- |
 | [smart_heating.py](smart_heating.py) | `0.3.2` — Hot Water Mode Fix + Fixed Rate Limiting + Floating Point | Predecessor of the space-heating controller in `custom_components/adaptive_heating/`. The rewrite changes the model and several behaviors; it is not a direct port. |
-| [water_disinfection.py](water_disinfection.py) | `1.0.0` | Companion domestic-hot-water controller. Archived for context; **not implemented or installed by Adaptive Heating**. |
+| [water_disinfection.py](water_disinfection.py) | `1.0.0` | Companion domestic-hot-water controller. Its setpoint-based approach is rewritten in integration **0.2.0**; this original PyScript is not installed. See the [replacement](../docs/DISINFECTION.md). |
 
 The files were supplied in this working tree on **2026-09-24**. Their original
 creation dates, deployment dates, earlier revisions and author history were not
@@ -64,8 +64,9 @@ The integration's tests do not execute these scripts.
 - `max_runtime_hours` is configured and `abort_disinfection()` exists, but the
   supplied script does not enforce that timeout or call the abort function.
 
-Any future disinfection rewrite needs its own requirements and validation. The
-presence of this archive does not mean that work is complete.
+The 0.2.0 rewrite corrects these completion/timeout paths and adds restart recovery.
+Its [requirements and validation](../docs/DISINFECTION.md) are separate from this
+archive; field validation remains pending.
 
 ## Preserving provenance
 

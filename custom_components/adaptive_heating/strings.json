@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Adaptive Heating",
-        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration.",
+        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -38,7 +38,18 @@
           "solar_preheat": "Allow limited preheating from sustained solar surplus",
           "surplus_watts": "Minimum sustained export for preheating (W)",
           "battery_ready_soc": "Battery percentage required for optional preheating",
-          "preheat_degrees": "Maximum extra room target for preheating (°C)"
+          "preheat_degrees": "Maximum extra room target for preheating (°C)",
+          "tank_temperature_entity": "Tank temperature sensor (optional, for disinfection)",
+          "tank_target_entity": "Normal hot-water tank target number (optional, separate from heating)",
+          "disinfection_target": "Disinfection tank target (°C)",
+          "disinfection_threshold": "Disinfection hold threshold (°C)",
+          "disinfection_hold_minutes": "Continuous time at or above threshold (minutes)",
+          "disinfection_min_days": "Earliest scheduled repeat after completion (days)",
+          "disinfection_max_days": "Scheduling deadline after completion (days)",
+          "disinfection_timeout_hours": "Maximum cycle runtime (hours)",
+          "disinfection_sample_seconds": "Maximum tank sample age and gap (seconds)",
+          "disinfection_hot_water_state": "State that confirms hot-water operation",
+          "disinfection_idle_state": "State that confirms idle/off operation"
         }
       }
     },
@@ -49,14 +60,19 @@
       "state_required": "Enter the exact state that means space heating (for example HEAT or on).",
       "temperature_required": "The output number must have a °C or °F temperature unit.",
       "battery_incomplete": "Select all three battery measurements, or leave all three empty.",
-      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power."
+      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power.",
+      "invalid_disinfection_limits": "Check disinfection temperatures, hold duration, sample age, scheduling window and timeout.",
+      "tank_incomplete": "Select both the measured tank temperature and its normal tank target, or leave both empty.",
+      "separate_tank_target": "Use the normal hot-water tank target, not the space-heating target.",
+      "invalid_tank_target": "The tank number must be available, use °C or °F, and support the configured target within its minimum, maximum and step.",
+      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Configure Adaptive Heating",
-        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration.",
+        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -90,7 +106,18 @@
           "solar_preheat": "Allow limited preheating from sustained solar surplus",
           "surplus_watts": "Minimum sustained export for preheating (W)",
           "battery_ready_soc": "Battery percentage required for optional preheating",
-          "preheat_degrees": "Maximum extra room target for preheating (°C)"
+          "preheat_degrees": "Maximum extra room target for preheating (°C)",
+          "tank_temperature_entity": "Tank temperature sensor (optional, for disinfection)",
+          "tank_target_entity": "Normal hot-water tank target number (optional, separate from heating)",
+          "disinfection_target": "Disinfection tank target (°C)",
+          "disinfection_threshold": "Disinfection hold threshold (°C)",
+          "disinfection_hold_minutes": "Continuous time at or above threshold (minutes)",
+          "disinfection_min_days": "Earliest scheduled repeat after completion (days)",
+          "disinfection_max_days": "Scheduling deadline after completion (days)",
+          "disinfection_timeout_hours": "Maximum cycle runtime (hours)",
+          "disinfection_sample_seconds": "Maximum tank sample age and gap (seconds)",
+          "disinfection_hot_water_state": "State that confirms hot-water operation",
+          "disinfection_idle_state": "State that confirms idle/off operation"
         }
       }
     },
@@ -101,7 +128,12 @@
       "state_required": "Enter the exact state that means space heating (for example HEAT or on).",
       "temperature_required": "The output number must have a °C or °F temperature unit.",
       "battery_incomplete": "Select all three battery measurements, or leave all three empty.",
-      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power."
+      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power.",
+      "invalid_disinfection_limits": "Check disinfection temperatures, hold duration, sample age, scheduling window and timeout.",
+      "tank_incomplete": "Select both the measured tank temperature and its normal tank target, or leave both empty.",
+      "separate_tank_target": "Use the normal hot-water tank target, not the space-heating target.",
+      "invalid_tank_target": "The tank number must be available, use °C or °F, and support the configured target within its minimum, maximum and step.",
+      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings."
     }
   }
 }

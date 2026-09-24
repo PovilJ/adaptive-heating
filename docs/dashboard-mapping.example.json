@@ -21,6 +21,12 @@
     "energy": "sensor.adaptive_heating_electrical_energy",
     "mode": "select.adaptive_heating_control_mode",
     "target": "number.adaptive_heating_room_target",
-    "evaluate": "button.adaptive_heating_evaluate_now"
+    "evaluate": "button.adaptive_heating_evaluate_now",
+    "tank": "sensor.hot_water_tank_temperature",
+    "tank_target": "number.hot_water_tank_target",
+    "disinfection_status": "sensor.adaptive_heating_disinfection_status",
+    "disinfection_mode": "select.adaptive_heating_disinfection_mode",
+    "disinfection_run": "button.adaptive_heating_run_disinfection",
+    "disinfection_cancel": "button.adaptive_heating_cancel_disinfection_and_restore"
   }
 }

@@ -1,6 +1,6 @@
 # From the legacy scripts to Adaptive Heating
 
-This guide compares the supplied PyScript snapshots with integration **0.1.0**.
+This guide compares the supplied PyScript snapshots with integration **0.2.0**.
 It describes source behavior and the intended cutover. The first-house
 installation and dashboard migration are now recorded, while Automatic cutover
 and field validation remain pending. See [history and current status](HISTORY.md)
@@ -9,13 +9,14 @@ and [legacy provenance](../legacy/README.md) for the evidence and original files
 The rewrite replaces the space-heating water-setpoint controller. The installer
 does not import PyScript configuration, helpers, learned coefficients, dashboards
 or history, and does not disable existing scripts. Each house gets its own UI
-configuration and new learning. Hot-water disinfection is outside this migration.
+configuration and new learning. Version 0.2.0 adds the optional [disinfection replacement](DISINFECTION.md); it
+requires tank mappings and an explicit first run before repeat scheduling.
 
 ## Behavior and feature disposition
 
-| Capability | Supplied legacy heating script | Integration 0.1.0 / disposition |
+| Capability | Supplied legacy heating script | Integration 0.2.0 / disposition |
 | --- | --- | --- |
-| Installation and house mappings | Copy/edit PyScript source with literal entity IDs and separately created helpers. | **Replaced:** a reusable component release with UI selectors and per-entry settings. No PyScript dependency for space heating. |
+| Installation and house mappings | Copy/edit PyScript source with literal entity IDs and separately created helpers. | **Replaced:** a reusable component release with UI selectors and per-entry settings. No PyScript dependency for either controller. |
 | Operating modes | Enable helper gates the whole cycle; the shadow branch is not a normal continuous mode. | **Expanded:** Observe calculates/learns without writes when inputs and operating gates permit; Automatic permits writes; Off disables writes and fitting. Startup/reconfiguration returns to Observe. |
 | Target and learning storage | `input_number` helpers for the room target, `k_loss` and `k_gain`. | **Replaced:** integration-owned Room target and stored model. Legacy coefficients are not imported; the model structure and bounds differ. |
 | Learning | Night-only window, short in-memory history and heating-on/off inference from water temperatures. | **Reworked:** consecutive eligible ordinary-heating observations, return/supply measurements, fixed three-hour emitter lag and bounded residual-based fitting. Sunny/partly-cloudy intervals are excluded; it is no longer tied to fixed night hours. |
@@ -29,7 +30,7 @@ configuration and new learning. Hot-water disinfection is outside this migration
 | Command cadence and limits | 30-minute trigger and manual button; per-cycle limits compare the original recommendation before some adjustments. | **Reworked:** five-minute evaluation, configurable command interval (default 30 minutes), elapsed-time rise/fall limits on the final output, hardware min/max/step, and holds for manual edits or unconfirmed commands. |
 | Diagnostics | Fixed `sensor.heating_*`/forecast/prediction entities; recommendations logged before final adjustments; 20 recent entries. | **Replaced:** entry-owned entities expose proposed, limited, commanded and actual values plus model diagnostics and 20 recent decisions. Old IDs and log schemas are not retained. |
 | Distribution and updates | Manually copy updated source. | **Added:** HACS custom-repository installation without manual file handling, or the component-only ZIP/checksum installer and built-in release updater. The built-in installer keeps code backups; HACS manages its own downloads. Restart is explicit. |
-| Water disinfection | Separate companion script controls the tank target and maintains its own helpers. | **Outside scope:** source is archived unchanged and excluded from releases. No replacement has been built. |
+| Water disinfection | Separate companion script controls the tank target and maintains its own helpers. | **Rewritten in 0.2.0:** normal tank-target boost, continuous fresh-temperature hold, enforced timeout, acknowledged restoration, persistent recovery/history, and shared room/solar/battery scheduling. Native Gree disinfection is not used. |
 
 Implementation references: [engine.py](../custom_components/adaptive_heating/engine.py),
 [coordinator.py](../custom_components/adaptive_heating/coordinator.py),
@@ -50,7 +51,7 @@ entities in the new UI. For another house, select its equivalent entities instea
 | `unit_status_sensor` | Operating state (`operating_entity`); set `heating_state` to the actual space-heating label (`HEAT` in the supplied script). |
 | `water_in_sensor` / `water_out_sensor` | Return/supply (`inlet_entity` / `outlet_entity`); both are needed for fitting. |
 | `input_boolean.smart_heating_enabled` | Optional external-controller inhibit (`inhibit_entity`) during migration. **On means blocked**, not enable Automatic. Use the new Control mode entity to select a mode. |
-| `input_number.heating_target_temp` | Manually set the desired value on the new Room target. There is no ongoing synchronization; the disinfection script still reads the old helper. |
+| `input_number.heating_target_temp` | Manually set the desired value on the new Room target. The new disinfection scheduler also uses the integration target. Only a still-running legacy script depends on the old helper. |
 | `input_number.heating_k_loss` / `input_number.heating_k_gain` | Keep old values for reference/rollback; let the new model learn independently. |
 | `input_button.run_adaptive_heating` | Replace dashboard/automation calls with the new Evaluate now button. It cannot bypass command intervals or rate limits. |
 | `min_water_temp` / `max_water_temp` | Configure and commission the new minimum/maximum for the actual equipment. Legacy 25–40 °C values are historical settings, not universal defaults for a house. |
@@ -81,13 +82,15 @@ an offline generator for other houses.
 3. If mapping the old enable helper as an inhibit, expect **Paused** while it is
    on; that gate suppresses recommendations as well as commands. After disabling
    the old heating writer, Observe can calculate and learn when space heating is
-   confirmed. Observe itself never sends a setpoint. Disabling a controller does
-   not turn off the heat pump; it leaves the device's existing setpoint in place.
+   confirmed. Space-heating Observe never sends a heating setpoint. Tank control
+   has its own mode; even in Observe/Off it may restore an interrupted boosted
+   target. Neither mode turns off the heat pump.
 4. Reconnect dashboards/automations to the new controls. Resolve the shared target
-   helper separately: disinfection still uses `input_number.heating_target_temp`,
-   and changing the integration's Room target does not update it. Retain the
-   disinfection helpers and PyScript runtime if that separate script remains in
-   use. Record any future change to it separately.
+   helper separately if the old disinfection script is still running. With 0.2.0,
+   disable that script before configuring the new tank controller; it uses the
+   new Room target directly. The original tank helper and manual run button no
+   longer control anything once PyScript is removed. Follow the
+   [disinfection setup and first-run procedure](DISINFECTION.md).
 5. Observe representative heating, hot-water, defrost, forecast/input failure and
    manual-change cases. Compare proposed/limited values and predictions with
    actual readings; record outcomes in [the project history](HISTORY.md).

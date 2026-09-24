@@ -17,6 +17,8 @@ SENSORS = [
     ("model_error", "Model prediction error", "°C", None),
     ("electric_power", "Electrical power", "W", SensorDeviceClass.POWER),
     ("electric_energy", "Electrical energy", "kWh", SensorDeviceClass.ENERGY),
+    ("disinfection_status", "Disinfection status", None, None),
+    ("disinfection_hold", "Disinfection hold progress", "min", SensorDeviceClass.DURATION),
 ]
 
 
@@ -37,11 +39,17 @@ class HeatingSensor(HeatingEntity, SensorEntity):
 
     @property
     def native_value(self):
+        if self.key == "disinfection_status":
+            return self.coordinator.disinfection.status
+        if self.key == "disinfection_hold":
+            return round(self.coordinator.disinfection.hold.seconds / 60, 2)
         value = (self.coordinator.data or {}).get(self.key)
         return value[:255] if isinstance(value, str) else value
 
     @property
     def extra_state_attributes(self):
+        if self.key == "disinfection_status":
+            return self.coordinator.disinfection.attributes()
         if self.key == "status":
             return {"recent_decisions": self.coordinator.events, "mode": self.coordinator.mode,
                     "sustained_solar_surplus": (self.coordinator.data or {}).get("surplus"),

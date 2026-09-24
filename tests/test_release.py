@@ -12,6 +12,7 @@ import zipfile
 from common import SOURCE, module
 
 release = module("release")
+VERSION = module("const").VERSION
 
 
 def files():
@@ -32,40 +33,40 @@ def archive(overrides=None):
 class ArchiveValidation(unittest.TestCase):
     def test_real_component_package_validates(self):
         blob, digest = archive()
-        checked = release.validate_archive(blob, digest, "0.1.0", "2026.7.4")
+        checked = release.validate_archive(blob, digest, VERSION, "2026.7.4")
         self.assertIn("coordinator.py", checked)
         self.assertNotIn("tests/test_engine.py", checked)
 
     def test_corruption_rejected_before_installation(self):
         blob, digest = archive()
         with self.assertRaisesRegex(ValueError, "checksum"):
-            release.validate_archive(blob + b"corrupt", digest, "0.1.0", "2026.7.4")
+            release.validate_archive(blob + b"corrupt", digest, VERSION, "2026.7.4")
 
     def test_traversal_cannot_overwrite_ha_configuration(self):
         blob, digest = archive({"../../configuration.yaml": b"bad"})
         with self.assertRaisesRegex(ValueError, "Unsafe"):
-            release.validate_archive(blob, digest, "0.1.0", "2026.7.4")
+            release.validate_archive(blob, digest, VERSION, "2026.7.4")
 
     def test_incompatible_home_assistant_rejected(self):
         blob, digest = archive()
         with self.assertRaisesRegex(ValueError, "newer Home Assistant"):
-            release.validate_archive(blob, digest, "0.1.0", "2025.12.0")
+            release.validate_archive(blob, digest, VERSION, "2025.12.0")
 
     def test_version_must_match_selected_release(self):
         blob, digest = archive()
         with self.assertRaisesRegex(ValueError, "Manifest"):
-            release.validate_archive(blob, digest, "0.2.0", "2026.7.4")
+            release.validate_archive(blob, digest, "99.0.0", "2026.7.4")
 
     def test_invalid_python_rejected(self):
         blob, digest = archive({"engine.py": b"def bad(:"})
         with self.assertRaises(SyntaxError):
-            release.validate_archive(blob, digest, "0.1.0", "2026.7.4")
+            release.validate_archive(blob, digest, VERSION, "2026.7.4")
 
     def test_runtime_and_manifest_versions_must_match(self):
-        content = (SOURCE / "const.py").read_bytes().replace(b'VERSION = "0.1.0"', b'VERSION = "0.2.0"')
+        content = (SOURCE / "const.py").read_bytes().replace(f'VERSION = "{VERSION}"'.encode(), b'VERSION = "99.0.0"')
         blob, digest = archive({"const.py": content})
         with self.assertRaisesRegex(ValueError, "Runtime"):
-            release.validate_archive(blob, digest, "0.1.0", "2026.7.4")
+            release.validate_archive(blob, digest, VERSION, "2026.7.4")
 
     def test_stable_versions_are_compared_numerically(self):
         self.assertGreater(release.version_tuple("0.10.0"), release.version_tuple("0.9.0"))

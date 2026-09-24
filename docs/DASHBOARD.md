@@ -1,6 +1,6 @@
 # Heating dashboard
 
-The first-house dashboard was rebuilt on **2026-09-24** for integration 0.1.0.
+The first-house dashboard was rebuilt on **2026-09-24** for integration 0.1.0, then extended for the 0.2.0 disinfection rewrite.
 It uses native Home Assistant cards. The already-installed card-mod resource
 adds rounded corners and subtle accent backgrounds; control and data cards do
 not depend on that styling resource. No additional frontend resource was installed.
@@ -16,8 +16,7 @@ not depend on that styling resource. No additional frontend resource was install
   grid and battery readings. Narrow screens use a readable decision list in
   place of the wider table.
 - **Equipment** (`/dashboard-heating/equipment`): hardware readings, existing
-  efficiency sensors, manual water adjustment, retained hot-water controls and
-  migration references, and the installed HACS update entity.
+  efficiency sensors, manual water adjustment and migration references, and the installed HACS update entity.
 
 The overview's Room target and Control mode belong to the new integration.
 Evaluate now uses the new integration button. It evaluates without writing in
@@ -85,6 +84,28 @@ Still pending:
 - Correct or verify the existing electrical-power helper's units/formula. Its
   value is inconsistent with the phase meters. The Equipment view flags this;
   neither that helper nor dependent efficiency calculations were changed.
-- The separate disinfection routine still uses its old room-reference helper.
-  It is retained and labelled on Equipment, and is not synchronized to the new
-  Room target. Its end-to-end operation was not tested by this dashboard change.
+- Install 0.2.0 and configure its tank entities, then verify a real cycle. The
+  owner's PyScript was removed; old helper state is historical, not evidence of
+  a running scheduler. The corrected dashboard uses the actual tank number,
+  removes disconnected legacy controls, and shows Update required while the new
+  disinfection status entity is absent. No live tank cycle was run by this change.
+
+## Disinfection panel (0.2.0)
+
+Map `disinfection_status`, `disinfection_mode`, `disinfection_run`, and
+`disinfection_cancel` to the integration's new entities. `tank` is the measured
+sensor and `tank_target` is the actual normal tank number. The example mapping
+includes all six. The retired `tank_helper`, `disinfection_active`,
+`last_disinfection`, and `legacy_target` mappings are no longer used.
+
+The overview shows cycle state/reason, target, threshold, continuous hold
+progress, last verified completion, next deadline and active timeout. Run and
+Cancel are native button actions; Run asks for confirmation in the dashboard.
+Mode/buttons are hidden until the new status entity is available. Activity &
+trends adds the persisted cycle-event history. Normal tank-target adjustment
+writes directly to the heat pump, so a manual edit during a cycle is detected.
+
+The pre-correction dashboard is saved locally as
+`heating-before-disinfection.json`; `heating-after-disinfection.json` is the
+read-back-verified replacement. Restore either through the Lovelace API. The
+original `heating-before-rewrite.json` remains the pre-migration backup.

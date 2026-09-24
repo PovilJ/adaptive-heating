@@ -79,8 +79,52 @@ Recommendations and learning are active when heating conditions allow. No water-
 The controller can adjust the heating-water target within its configured limits when all checks pass.
 {% else %}**Controller off**
 
-Automatic writes and learning are stopped. The heat pump keeps its own operating mode and water target.
+Space-heating writes and learning are stopped. Disinfection has its own control mode below.
 {% endif %}"""
+
+    mode_help = mode_help.replace("No water-temperature commands are sent.", "No space-heating targets are sent. Disinfection has its own control mode below.")
+
+    def dhw_live(card):
+        if not card or not e.get("disinfection_status"):
+            return None
+        return {"type": "conditional", "conditions": [
+            {"condition": "state", "entity": e["disinfection_status"], "state_not": "unknown"},
+            {"condition": "state", "entity": e["disinfection_status"], "state_not": "unavailable"}],
+            "card": card, "grid_options": {"columns": 12, "rows": "auto"}}
+
+    def dhw_button(key, name, icon, confirmation=None):
+        if not e.get(key):
+            return None
+        action = {"action": "perform-action", "perform_action": "button.press", "target": {"entity_id": e[key]}}
+        if confirmation:
+            action["confirmation"] = {"text": confirmation}
+        return dhw_live(tile(key, name, icon, 12, "blue", hide_state=True,
+                             tap_action=action, icon_tap_action=action))
+
+    dhw_summary = markdown("""<ha-icon icon="mdi:water-check"></ha-icon> **TANK DISINFECTION**
+
+{% set status = states('@disinfection_status@') %}
+{% if status in ['unknown', 'unavailable'] %}
+### Update required
+The old PyScript controls are retired. Install Adaptive Heating 0.2.0 or newer and configure the tank entities to use the replacement. This card does not confirm that a schedule is running.
+{% else %}
+### {{ status | replace('_', ' ') | capitalize }}
+{{ state_attr('@disinfection_status@', 'reason') }}
+
+Target **{{ state_attr('@disinfection_status@', 'target_temperature') }} °C** · hold at **{{ state_attr('@disinfection_status@', 'hold_threshold') }} °C or above**
+
+Continuous hold **{{ ((state_attr('@disinfection_status@', 'hold_seconds') or 0) / 60) | round(1) }} / {{ state_attr('@disinfection_status@', 'hold_minutes') }} min**
+
+{% set finished = state_attr('@disinfection_status@', 'last_success') %}
+Last verified cycle: **{{ as_local(as_datetime(finished)).strftime('%d %b %Y, %H:%M') if finished else 'No verified cycle yet' }}**
+
+{% set due = state_attr('@disinfection_status@', 'due_by') %}
+{% if due %}Scheduling deadline: **{{ as_local(as_datetime(due)).strftime('%d %b, %H:%M') }}**{% endif %}
+
+{% set timeout = state_attr('@disinfection_status@', 'timeout_at') %}
+{% if timeout %}Cycle timeout: **{{ as_local(as_datetime(timeout)).strftime('%H:%M') }}**{% endif %}
+{% endif %}""", accent="77, 157, 224") if e.get("disinfection_status") else markdown(
+        "**Disinfection is not connected to this dashboard.** Configure the integration's tank entities and map its disinfection controls. Retained legacy helpers do not prove a scheduler is running.") if e.get("tank") else None
 
     comfort = markdown("""<ha-icon icon="mdi:home-thermometer-outline"></ha-icon> **LIVING SPACE**
 
@@ -155,15 +199,17 @@ Adaptive Heating has not sent a water target since this restart.
         section("Hot water & energy", "mdi:water-boiler", [
             temperature("tank", "Tank temperature", "mdi:water-thermometer") if e.get("tank") else None,
             temperature("tank_target", "Tank target", "mdi:water-boiler") if e.get("tank_target") else None,
-            tile("tank_helper", "Hot-water target", "mdi:water-boiler", 12, "blue", [{"type": "numeric-input", "style": "buttons"}]),
-            tile("disinfection_active", "Disinfection", "mdi:shield-check-outline", 6, "blue", tap_action={"action": "none"}, icon_tap_action={"action": "none"}),
-            tile("last_disinfection", "Last completed", "mdi:calendar-check", 6, "blue", tap_action={"action": "none"}, icon_tap_action={"action": "none"}),
+            tile("tank_target", "Normal hot-water target", "mdi:water-boiler", 12, "blue", [{"type": "numeric-input", "style": "buttons"}]),
+            dhw_summary,
+            dhw_live(tile("disinfection_mode", "Disinfection mode", "mdi:water-check", 12, "blue", [{"type": "select-options", "style": "dropdown"}])),
+            dhw_button("disinfection_run", "Run disinfection", "mdi:play", "Start a tank-temperature cycle now? Disinfection must be in Automatic. The integration will save and later restore the current tank target."),
+            dhw_button("disinfection_cancel", "Cancel / restore tank target", "mdi:stop-circle-outline"),
             tile("energy_daily", "Electricity today", "mdi:lightning-bolt-outline", 6, "amber"),
             tile("energy", "Total electricity", "mdi:counter", 6, "amber"),
             styled({"type": "weather-forecast", "entity": e["weather"], "forecast_type": "hourly",
                     "show_current": True, "show_forecast": True, "forecast_slots": 6,
                     "grid_options": {"columns": 12, "rows": 4}}),
-            markdown("Hot-water controls use the existing tank routine. Adaptive Heating controls space heating.") if e.get("tank_helper") else None,
+            markdown("The normal hot-water control writes directly to the tank target. Changing it during disinfection cancels the cycle and preserves your chosen target. Observe prevents new cycles; restoration of an interrupted cycle can still run.") if e.get("tank_target") else None,
         ]),
     ]
 
@@ -204,6 +250,17 @@ Latest 20 evaluations since startup. Sent records a new command in that evaluati
         ]),
         section("Decision history", "mdi:timeline-clock-outline", [decision_table, decision_mobile,
             graph("Controller activity · 24 hours", [("mode", "Mode", "#70c1b3"), ("status", "Status", "#f5a646"), ("operating", "Heat pump", "#64b5f6")]),
+            markdown("""**DISINFECTION HISTORY**
+
+{% for item in (state_attr('@disinfection_status@', 'recent_cycles') or []) %}
+**{{ as_local(as_datetime(item.time)).strftime('%d %b %H:%M') }} · {{ item.status | replace('_', ' ') | capitalize }}**
+
+{{ item.reason }}
+
+{% if not loop.last %}---{% endif %}
+{% else %}No cycle events recorded by the new controller.{% endfor %}
+
+The latest 20 cycle events survive restarts. Completion means the configured temperature hold and normal-target restoration were confirmed.""") if e.get("disinfection_status") else None,
         ]),
         section("Learning & solar", "mdi:brain", [
             tile("samples", "Learning samples", "mdi:school-outline"),
@@ -246,10 +303,7 @@ Latest 20 evaluations since startup. Sent records a new command in that evaluati
             markdown("**Manual water adjustment**\n\nChanging the device water target can pause automatic control. Review the cause before selecting Observe and then Automatic again."),
             tile("output", "Manual heating-water target", "mdi:thermometer-water", 12, "orange", [{"type": "numeric-input", "style": "buttons"}]),
             tile("legacy_enabled", "Legacy controller enabled", "mdi:history", 12, "grey", tap_action={"action": "none"}, icon_tap_action={"action": "none"}),
-            markdown("Keep the legacy space-heating controller off while using Adaptive Heating. The hot-water routine remains separate.") if e.get("legacy_enabled") else None,
-            tile("legacy_target", "Disinfection room reference", "mdi:home-thermometer", 12, "blue", [{"type": "numeric-input", "style": "buttons"}]),
-            markdown("The existing disinfection routine uses this separate room reference. It is not automatically synchronized with the new Room target.") if e.get("legacy_target") else None,
-            tile("disinfection_run", "Run existing disinfection routine", "mdi:water-check", 12, "blue", hide_state=True),
+            markdown("Keep both legacy PyScript writers disabled when using the integration. Disinfection uses the integration's Room target; the old room-reference and tank-target helpers are no longer controls.") if e.get("legacy_enabled") else None,
             tile("hacs_update", "Integration update · HACS", "mdi:package-up", 12, "blue"),
             {"type": "button", "name": "Integration settings", "icon": "mdi:cog-outline", "show_state": False,
              "tap_action": {"action": "navigate", "navigation_path": "/config/integrations/integration/adaptive_heating"},

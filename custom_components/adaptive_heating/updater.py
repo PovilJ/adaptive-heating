@@ -74,12 +74,15 @@ class ReleaseManager:
                 # Wait for any in-flight controller command to finish, then pause
                 # each controller before replacing code. No automatic HA restart.
                 for controller in list(self.controllers):
+                    await controller.async_disinfection_mode("observe")
+                    if controller.disinfection.blocks_heating:
+                        raise HomeAssistantError("Wait for tank target restoration before installing an update")
                     await controller.async_mode("observe")
                 self.backup_path = await self.hass.async_add_executor_job(
                     install_files, files, Path(__file__).resolve().parent,
                     Path(self.hass.config.path(".adaptive_heating_backups")))
                 self.restart_pending = True
-            except (ClientError, TimeoutError, ValueError, OSError, UnicodeError, SyntaxError, BadZipFile, AttributeError, TypeError) as err:
+            except (HomeAssistantError, ClientError, TimeoutError, ValueError, OSError, UnicodeError, SyntaxError, BadZipFile, AttributeError, TypeError) as err:
                 self.last_error = str(err)
                 raise HomeAssistantError(f"Update was not installed: {err}") from err
             finally:

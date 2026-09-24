@@ -72,5 +72,6 @@ must be assessed against a baseline under comparable weather and comfort.
 Priority follow-ups are automatic lag identification, multi-room references,
 rolling forecast error evaluation, measured electricity comparisons, optional
 tariff/export economics, and support for signed power sensors directly in setup.
-Domestic-hot-water disinfection remains a separate, unmodified controller. Changes
+Domestic-hot-water disinfection is implemented as an optional coordinated controller
+in 0.2.0; see [its policy and recovery design](DISINFECTION.md). Changes
 to that controller require their own specification and validation.

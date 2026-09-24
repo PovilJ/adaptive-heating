@@ -44,6 +44,7 @@ def load_adapter():
     modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = FakeCoordinator
     modules["homeassistant.util.dt"].utcnow = lambda: datetime.now(timezone.utc)
     modules["homeassistant.util.dt"].parse_datetime = lambda value: datetime.fromisoformat(value)
+    modules["homeassistant.util.dt"].as_local = lambda value: value
     modules["homeassistant.util"].dt = modules["homeassistant.util.dt"]
     name = PACKAGE + ".coordinator_harness"
     spec = importlib.util.spec_from_file_location(name, SOURCE / "coordinator.py")
