@@ -18,10 +18,11 @@ replace users' selections with new defaults.
    - `adaptive_heating-0.1.0.zip`
    - `adaptive_heating-0.1.0.zip.sha256`
 
-The first 0.1.0 build has not yet passed actual HA runtime validation. Keep it a
-development build until that validation is done. The updater ignores draft and
-prerelease releases, so use those for public testing rather than advertising an
-untested build as a stable update.
+The first 0.1.0 build passes all 59 tests, including platform-import and setup-form
+checks against Home Assistant 2026.7.4. Full integration setup/unload and heating
+trials are still pending. Keep it a development build until that validation is
+done. The updater ignores draft and prerelease releases, so use those for public
+testing rather than advertising an untested build as a stable update.
 
 GitHub's automatically generated source archive has a different layout and is not
 an installable integration asset. Publish the archive made by the build script.

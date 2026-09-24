@@ -4,11 +4,12 @@ An experimental Home Assistant custom integration for predictive heat-pump water
 temperature control. It uses existing Home Assistant entities from any compatible
 device integration. Each installation owns its settings and learned response.
 
-**0.1.0 is an initial development build.** The standalone controller, HA adapter
-boundary, and release installer have offline tests. Loading the integration in a
-real isolated Home Assistant instance and observing real heating behavior are
-still required before relying on Automatic mode. It has not been installed into
-the live heating system during development.
+**0.1.0 is an initial development build.** All 59 tests pass, including controller,
+adapter and installer tests, plus platform-import and setup-form smoke checks
+against Home Assistant 2026.7.4. Loading the complete integration in an isolated
+Home Assistant instance and observing real heating behavior are still required
+before relying on Automatic mode. It has not been installed into the live heating
+system during development.
 
 ## What this build includes
 
@@ -36,8 +37,8 @@ water temperature as an efficiency proxy, not a claim of measured savings.
 
 ## Requirements and entities
 
-Target Home Assistant: **2026.7.0 or newer**, with runtime verification initially
-targeting 2026.7.4. A writable `custom_components` directory is needed for installation.
+Target Home Assistant: **2026.7.0 or newer**, with import/schema smoke checks
+verified on 2026.7.4. A writable `custom_components` directory is needed for installation.
 
 Required selectors:
 
@@ -165,9 +166,10 @@ python3 scripts/install.py dist/adaptive_heating-0.1.0.zip --config /config --ch
 ```
 
 For the two real-HA import/schema smoke checks, create a separate Python 3.14
-virtual environment and install `requirements-dev.txt`. Those tests are explicitly
-skipped when HA is absent. The adapter tests use in-memory fake services and never
-contact equipment. Exercise an isolated HA installation before deploying live.
+virtual environment and install `requirements-dev.txt`, then run the same test
+command with that environment's Python. Those tests are explicitly skipped when
+HA is absent. The adapter tests use in-memory fake services and never contact
+equipment. Exercise an isolated HA installation before deploying live.
 
 See [design and acceptance criteria](docs/DESIGN.md), [releasing](docs/RELEASING.md),
 and [repository access](docs/GITHUB_ACCESS.md). No open-source license has yet been
