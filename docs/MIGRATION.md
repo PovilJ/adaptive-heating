@@ -27,7 +27,7 @@ configuration and new learning. Hot-water disinfection is outside this migration
 | Missing forecasts | Fixed 30 °C recommendation and target-based predicted minimum. | **Replaced:** curve/room-feedback fallback and an unavailable prediction rather than an invented forecast result. |
 | Command cadence and limits | 30-minute trigger and manual button; per-cycle limits compare the original recommendation before some adjustments. | **Reworked:** five-minute evaluation, configurable command interval (default 30 minutes), elapsed-time rise/fall limits on the final output, hardware min/max/step, and holds for manual edits or unconfirmed commands. |
 | Diagnostics | Fixed `sensor.heating_*`/forecast/prediction entities; recommendations logged before final adjustments; 20 recent entries. | **Replaced:** entry-owned entities expose proposed, limited, commanded and actual values plus model diagnostics and 20 recent decisions. Old IDs and log schemas are not retained. |
-| Distribution and updates | Manually copy updated source. | **Added:** component-only ZIP/checksum, installer and manual GitHub update controls with code backup; restart is explicit. |
+| Distribution and updates | Manually copy updated source. | **Added:** HACS custom-repository installation without manual file handling, or the component-only ZIP/checksum installer and built-in release updater. The built-in installer keeps code backups; HACS manages its own downloads. Restart is explicit. |
 | Water disinfection | Separate companion script controls the tank target and maintains its own helpers. | **Outside scope:** source is archived unchanged and excluded from releases. No replacement has been built. |
 
 Implementation references: [engine.py](../custom_components/adaptive_heating/engine.py),
@@ -71,7 +71,8 @@ assigns their entity IDs; do not assume fixed replacements for the legacy IDs.
    this source archive contains only the two Python snapshots. Identify every
    automation or controller writing the space-heating setpoint.
 2. Complete isolated-HA checks from [the design](DESIGN.md#tests-before-field-use),
-   then follow the [installation instructions](../README.md#first-installation-manual-once-per-house).
+   then follow the [installation instructions](../README.md#first-installation-through-hacs)
+   (HACS or the alternative package installer).
    Select local entities, operating-state label and commissioned limits. Keep
    **Observe** selected.
 3. If mapping the old enable helper as an inhibit, expect **Paused** while it is
@@ -101,11 +102,14 @@ legacy PyScript system or all HA data.
 
 ## Installation at another house
 
-Install the same numbered integration archive using the README procedure and
-select that house's entities and settings. Repeat Observe/commissioning there.
+Add the same repository in HACS and download the same version using the
+[README procedure](../README.md#first-installation-through-hacs), or use the
+package installer. Before numbered releases exist, record the `main` commit
+shown by HACS for comparisons between houses. Select that house's entities and
+settings and repeat Observe/commissioning there.
 Do not copy legacy scripts, helper coefficients or another installation's
 `.storage` data. The new integration owns its learning and target locally.
 
-This removes source editing and copying for normal configuration and later
-manual updates. First installation still requires placing the packaged component
-in Home Assistant once; a completed second-house trial has not yet been recorded.
+HACS handles first installation and later downloads without manually copying
+source or handling archives. A completed second-house trial has not yet been
+recorded.

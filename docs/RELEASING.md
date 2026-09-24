@@ -6,7 +6,8 @@ The updater expects a stable three-part version such as `0.1.0` in all of:
 - `custom_components/adaptive_heating/const.py`
 - `custom_components/adaptive_heating/release.json`
 
-Update the minimum HA version in both `const.py` and `release.json` when needed.
+Update the minimum HA version in `const.py`, `release.json` and root `hacs.json`
+when needed.
 Changing config-entry or stored-data schemas requires a tested migration; never
 replace users' selections with new defaults.
 
@@ -35,6 +36,22 @@ Only integration files are included: no live HA configuration, `.storage`, entit
 mappings, credentials, history, tests or unrelated integrations. The historical
 scripts in [legacy/](../legacy/README.md) are also excluded; installing a release
 does not install, migrate or disable those PyScript controllers.
+
+## HACS custom repository
+
+Root [hacs.json](../hacs.json) selects the existing
+`custom_components/adaptive_heating/` layout. `zip_release` is false: HACS downloads
+the component from repository source, so users do not build, download or unpack
+the installer assets themselves. HACS can use the default branch before releases
+exist; keep that development status visible in the README. Once numbered releases
+exist, users can select them in HACS.
+
+Continue publishing ZIP/checksum assets for the separate built-in updater and
+package installer. HACS does not invoke that updater's validation, Observe
+transition or code-backup path. Document each update route accurately and test
+HACS installation/download/restart in an isolated HA instance before marking that
+route as validated. Adding a custom repository is separate from admission to
+HACS's default catalog.
 
 ## Recovering code
 

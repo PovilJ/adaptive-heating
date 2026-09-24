@@ -42,6 +42,8 @@ changes; hot-water disinfection remains separate and is not part of the package.
   electrical measurements, and a bounded recent-decision log.
 - A manual **Check for updates** button and a standard **Install update** entity
   for this repository's stable releases. No HACS dependency or automatic update.
+- Optional installation by repository URL through HACS, with no manual archive
+  handling or source copying.
 
 This build does **not** calculate COP, infer flow from pump speed, operate battery
 charging settings, or manage domestic-hot-water disinfection. Measured electrical
@@ -84,13 +86,39 @@ Hot-water, defrost, off or unknown operating states prevent writes. A configured
 inhibit input also blocks writes when on or unavailable. Map the existing
 controller's enable flag to this input during migration.
 
+## First installation through HACS
+
+**To install by repository URL without handling ZIP files, use HACS.** Adaptive
+Heating is a custom integration. HACS downloads and places its files for you.
+Home Assistant's **Apps → Repositories** screen installs standalone apps and
+cannot install this integration.
+
+1. If HACS is not already available in your HA sidebar, follow its official
+   [installation and setup guide](https://www.hacs.xyz/docs/use/).
+2. Open **HACS → ⋮ → Custom repositories**.
+3. Enter `https://github.com/PovilJ/adaptive-heating` and select type
+   **Integration**, then **Add**.
+4. Find **Adaptive Heating** in HACS, open it and select **Download**. Until a
+   numbered release is published, HACS uses the default `main` branch; this is
+   the experimental development build.
+5. Restart Home Assistant, then open **Settings → Devices & services → Add
+   integration → Adaptive Heating** and select this house's entities.
+6. Keep **Observe** selected while checking readings, limits and recommendations.
+   Follow the [migration guide](docs/MIGRATION.md) when replacing the old heating
+   script, and disable the old writer before selecting Automatic.
+
+Repeat those steps at the other house with its own entities. Configuration and
+learned data stay in each HA instance. HACS installs only the component directory;
+the legacy scripts are not installed. The repository is added manually as a
+custom repository; it is not listed in the default HACS catalog.
+
+See the official [HACS custom-repository instructions](https://www.hacs.xyz/docs/faq/custom_repositories/).
+If you prefer not to use HACS, the package installer below remains available.
+
 ## First installation (manual, once per house)
 
-**Use the package installer, then Settings → Devices & services → Add integration.**
-Adaptive Heating runs inside Home Assistant as a custom integration. The
-Settings → Apps → Install app → Repositories screen accepts a different kind of
-repository; it cannot install this project. See [installation troubleshooting](#installation-troubleshooting)
-if it reports “not a valid app repository”. HACS is not required.
+This alternative installs the same integration without HACS. For installation
+by URL, use [the HACS steps above](#first-installation-through-hacs).
 
 1. Download/clone [the project](https://github.com/PovilJ/adaptive-heating).
    Download the numbered release ZIP and adjacent `.sha256` asset into `dist/`
@@ -147,12 +175,23 @@ applications; this repository supplies a custom integration loaded from
 change its type. See Home Assistant's [app repository format](https://developers.home-assistant.io/docs/apps/repository/)
 and [custom integration location](https://developers.home-assistant.io/docs/creating_integration_file_structure/#where-home-assistant-looks-for-integrations).
 
-Use the package steps above. After installation, confirm that the HA configuration
+Use **HACS → Custom repositories → Integration** with the URL above, or the
+package installer. After installation, confirm that the HA configuration
 directory contains `custom_components/adaptive_heating/manifest.json` directly,
 restart Home Assistant, then add **Adaptive Heating** under **Devices & services**.
 If it is still missing, check HA's logs for an integration import/version error
 and confirm that the archive was not extracted into an extra nested directory.
-Adding a repository URL alone does not place the integration files in HA.
+In HACS, adding the repository is followed by downloading the integration; the
+repository entry alone does not install it.
+
+**“The version b063640 for this integration can not be used with HACS”** refers
+to a commit before `hacs.json` was added. Refresh this repository's information
+in HACS and retry the latest `main` commit. Do not select `b063640` or another
+older commit without that file. HACS needs to read the metadata at the selected
+commit; a GitHub release is not required for branch installation. If the same
+error occurs on a newer commit, inspect HA's HACS logs for a metadata download
+failure. A separate minimum-version message means HA must meet the documented
+2026.7.0 requirement.
 
 ## Normal controls
 
@@ -190,6 +229,18 @@ is needed. Missing/invalid measurements or a sampling gap reset qualification.
   export credit/banking arrangement; this build does not model export economics.
 
 ## Manual updates
+
+If you installed through HACS, use HACS for subsequent downloads/updates. Select
+Observe before downloading, restart Home Assistant afterward, then check operation
+before re-enabling Automatic. HACS handles file replacement itself and does not
+run this project's installer or its pre-install Observe transition. Its downloads
+also do not create this project's `.adaptive_heating_backups` code copies. Keep
+updates manual and use one update route consistently so HACS's installed-version
+record stays aligned with the files. HACS can track `main` commits before numbered
+releases exist.
+
+For installations managed by this project's package installer, use the built-in
+release controls:
 
 Click **Check for updates**, review the offered stable version and release notes,
 then click **Install update**. An update is never installed by a timer. Installation
