@@ -1,0 +1,5 @@
+{
+  "version": "0.1.0",
+  "minimum_home_assistant": "2026.7.0",
+  "repository": "PovilJ/adaptive-heating"
+}

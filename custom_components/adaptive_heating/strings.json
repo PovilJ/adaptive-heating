@@ -1,0 +1,107 @@
+{
+  "title": "Adaptive Heating",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Adaptive Heating",
+        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration.",
+        "data": {
+          "indoor_entity": "Indoor temperature sensor",
+          "weather_entity": "Weather entity (hourly forecast)",
+          "output_entity": "Heating-water setpoint number",
+          "operating_entity": "Heat-pump operating state",
+          "heating_state": "State that confirms space heating",
+          "outdoor_entity": "Outdoor temperature sensor (optional)",
+          "inlet_entity": "Return-water temperature (optional)",
+          "outlet_entity": "Supply-water temperature (optional)",
+          "defrost_entity": "Defrost active sensor (optional)",
+          "inhibit_entity": "Other controller enabled / inhibit (optional)",
+          "electric_power_entity": "Heat-pump electrical power (optional)",
+          "electric_energy_entity": "Heat-pump cumulative electricity (optional)",
+          "pv_entity": "Measured solar generation power (optional)",
+          "import_entity": "Grid import power, positive (optional)",
+          "export_entity": "Grid export power, positive (optional)",
+          "battery_soc_entity": "Battery charge percentage (optional)",
+          "battery_charge_entity": "Battery charging power, positive (optional)",
+          "battery_discharge_entity": "Battery discharging power, positive (optional)",
+          "target": "Initial room target (°C)",
+          "minimum_water": "Minimum water setpoint (°C)",
+          "maximum_water": "Maximum water setpoint (°C)",
+          "comfort_band": "Room comfort tolerance (°C)",
+          "curve_slope": "Heating curve slope",
+          "curve_offset": "Heating curve offset (°C)",
+          "room_feedback": "Room feedback strength",
+          "rise_per_hour": "Maximum setpoint increase per hour (°C)",
+          "fall_per_hour": "Maximum setpoint decrease per hour (°C)",
+          "control_minutes": "Minimum time between control cycles (minutes)",
+          "stale_minutes": "Maximum measurement age (minutes)",
+          "solar_preheat": "Allow limited preheating from sustained solar surplus",
+          "surplus_watts": "Minimum sustained export for preheating (W)",
+          "battery_ready_soc": "Battery percentage required for optional preheating",
+          "preheat_degrees": "Maximum extra room target for preheating (°C)"
+        }
+      }
+    },
+    "error": {
+      "invalid_limits": "Check the temperature, rate, and time limits. Extra preheating must fit within the comfort tolerance.",
+      "entity_missing": "Select an existing entity of the required type.",
+      "already_controlled": "Another Adaptive Heating entry already controls this setpoint.",
+      "state_required": "Enter the exact state that means space heating (for example HEAT or on).",
+      "temperature_required": "The output number must have a °C or °F temperature unit.",
+      "battery_incomplete": "Select all three battery measurements, or leave all three empty.",
+      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Adaptive Heating",
+        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration.",
+        "data": {
+          "indoor_entity": "Indoor temperature sensor",
+          "weather_entity": "Weather entity (hourly forecast)",
+          "output_entity": "Heating-water setpoint number",
+          "operating_entity": "Heat-pump operating state",
+          "heating_state": "State that confirms space heating",
+          "outdoor_entity": "Outdoor temperature sensor (optional)",
+          "inlet_entity": "Return-water temperature (optional)",
+          "outlet_entity": "Supply-water temperature (optional)",
+          "defrost_entity": "Defrost active sensor (optional)",
+          "inhibit_entity": "Other controller enabled / inhibit (optional)",
+          "electric_power_entity": "Heat-pump electrical power (optional)",
+          "electric_energy_entity": "Heat-pump cumulative electricity (optional)",
+          "pv_entity": "Measured solar generation power (optional)",
+          "import_entity": "Grid import power, positive (optional)",
+          "export_entity": "Grid export power, positive (optional)",
+          "battery_soc_entity": "Battery charge percentage (optional)",
+          "battery_charge_entity": "Battery charging power, positive (optional)",
+          "battery_discharge_entity": "Battery discharging power, positive (optional)",
+          "target": "Initial room target (°C)",
+          "minimum_water": "Minimum water setpoint (°C)",
+          "maximum_water": "Maximum water setpoint (°C)",
+          "comfort_band": "Room comfort tolerance (°C)",
+          "curve_slope": "Heating curve slope",
+          "curve_offset": "Heating curve offset (°C)",
+          "room_feedback": "Room feedback strength",
+          "rise_per_hour": "Maximum setpoint increase per hour (°C)",
+          "fall_per_hour": "Maximum setpoint decrease per hour (°C)",
+          "control_minutes": "Minimum time between control cycles (minutes)",
+          "stale_minutes": "Maximum measurement age (minutes)",
+          "solar_preheat": "Allow limited preheating from sustained solar surplus",
+          "surplus_watts": "Minimum sustained export for preheating (W)",
+          "battery_ready_soc": "Battery percentage required for optional preheating",
+          "preheat_degrees": "Maximum extra room target for preheating (°C)"
+        }
+      }
+    },
+    "error": {
+      "invalid_limits": "Check the temperature, rate, and time limits. Extra preheating must fit within the comfort tolerance.",
+      "entity_missing": "Select an existing entity of the required type.",
+      "already_controlled": "Another Adaptive Heating entry already controls this setpoint.",
+      "state_required": "Enter the exact state that means space heating (for example HEAT or on).",
+      "temperature_required": "The output number must have a °C or °F temperature unit.",
+      "battery_incomplete": "Select all three battery measurements, or leave all three empty.",
+      "solar_incomplete": "Solar preheating needs measured PV, grid import, and grid export power."
+    }
+  }
+}
