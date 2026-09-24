@@ -1,0 +1,26 @@
+{
+  "url_path": "dashboard-heating",
+  "entities": {
+    "indoor": "sensor.living_room_temperature",
+    "weather": "weather.home",
+    "operating": "sensor.heat_pump_operating_state",
+    "output": "number.heat_pump_heating_water_target",
+    "inlet": "sensor.heat_pump_return_temperature",
+    "outlet": "sensor.heat_pump_supply_temperature",
+    "defrost": "binary_sensor.heat_pump_defrost",
+    "status": "sensor.adaptive_heating_status",
+    "reason": "sensor.adaptive_heating_decision_reason",
+    "proposed": "sensor.adaptive_heating_proposed_water_temperature",
+    "limited": "sensor.adaptive_heating_limited_water_temperature",
+    "commanded": "sensor.adaptive_heating_last_commanded_water_temperature",
+    "actual": "sensor.adaptive_heating_actual_water_setpoint",
+    "prediction": "sensor.adaptive_heating_predicted_minimum_room_temperature",
+    "samples": "sensor.adaptive_heating_learning_samples",
+    "error": "sensor.adaptive_heating_model_prediction_error",
+    "power": "sensor.adaptive_heating_electrical_power",
+    "energy": "sensor.adaptive_heating_electrical_energy",
+    "mode": "select.adaptive_heating_control_mode",
+    "target": "number.adaptive_heating_room_target",
+    "evaluate": "button.adaptive_heating_evaluate_now"
+  }
+}

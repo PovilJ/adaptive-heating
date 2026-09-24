@@ -1,9 +1,10 @@
 # From the legacy scripts to Adaptive Heating
 
 This guide compares the supplied PyScript snapshots with integration **0.1.0**.
-It describes source behavior and the intended cutover; it is not a record of a
-completed live migration. See [history and current status](HISTORY.md) for that
-distinction and [legacy provenance](../legacy/README.md) for the original files.
+It describes source behavior and the intended cutover. The first-house
+installation and dashboard migration are now recorded, while Automatic cutover
+and field validation remain pending. See [history and current status](HISTORY.md)
+and [legacy provenance](../legacy/README.md) for the evidence and original files.
 
 The rewrite replaces the space-heating water-setpoint controller. The installer
 does not import PyScript configuration, helpers, learned coefficients, dashboards
@@ -56,6 +57,8 @@ entities in the new UI. For another house, select its equivalent entities instea
 
 For dashboards, find the entities under the new Adaptive Heating device. HA
 assigns their entity IDs; do not assume fixed replacements for the legacy IDs.
+The [dashboard guide](DASHBOARD.md) records the first-house rewrite and provides
+an offline generator for other houses.
 
 | Old dashboard reference | New reference / gap |
 | --- | --- |

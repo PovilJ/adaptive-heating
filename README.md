@@ -10,8 +10,9 @@ platform-import and setup-form smoke checks against Home Assistant 2026.7.4.
 See the [validation record](docs/HISTORY.md#validation-evidence) for environments
 and the latest local run. Loading the complete integration in an isolated
 Home Assistant instance and observing real heating behavior are still required
-before relying on Automatic mode. It has not been installed into the live heating
-system during development.
+before relying on Automatic mode. The first live installation is now loaded on
+Home Assistant 2026.7.4 in Observe mode, with the heating dashboard migrated.
+Real heating-cycle validation and Automatic cutover remain pending.
 
 ## Origins and project status
 
@@ -24,6 +25,7 @@ changes; hot-water disinfection remains separate and is not part of the package.
 - [Timeline, completed work and next milestones](docs/HISTORY.md)
 - [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
 - [Original source, dependencies and preservation checksums](legacy/README.md)
+- [Dashboard layout, reuse and rollback](docs/DASHBOARD.md)
 
 ## What this build includes
 
