@@ -4,12 +4,26 @@ An experimental Home Assistant custom integration for predictive heat-pump water
 temperature control. It uses existing Home Assistant entities from any compatible
 device integration. Each installation owns its settings and learned response.
 
-**0.1.0 is an initial development build.** All 59 tests pass, including controller,
-adapter and installer tests, plus platform-import and setup-form smoke checks
-against Home Assistant 2026.7.4. Loading the complete integration in an isolated
+**0.1.0 is an initial development build.** The recorded validation baseline is 59
+passing tests, including controller, adapter and installer tests, plus
+platform-import and setup-form smoke checks against Home Assistant 2026.7.4.
+See the [validation record](docs/HISTORY.md#validation-evidence) for environments
+and the latest local run. Loading the complete integration in an isolated
 Home Assistant instance and observing real heating behavior are still required
 before relying on Automatic mode. It has not been installed into the live heating
 system during development.
+
+## Origins and project status
+
+This is a rewrite of the original house-specific PyScript heating controller into
+a reusable integration. The original heating `0.3.2` and companion water
+disinfection `1.0.0` scripts are preserved in [the legacy archive](legacy/README.md).
+Integration `0.1.0` starts its own version series. The rewrite includes behavior
+changes; hot-water disinfection remains separate and is not part of the package.
+
+- [Timeline, completed work and next milestones](docs/HISTORY.md)
+- [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
+- [Original source, dependencies and preservation checksums](legacy/README.md)
 
 ## What this build includes
 
@@ -72,13 +86,37 @@ controller's enable flag to this input during migration.
 
 ## First installation (manual, once per house)
 
-1. Download/clone the project and its numbered release archive plus adjacent
-   `.sha256` file, or build the archive as described below.
-2. From the project directory, validate the archive:
+**Use the package installer, then Settings → Devices & services → Add integration.**
+Adaptive Heating runs inside Home Assistant as a custom integration. The
+Settings → Apps → Install app → Repositories screen accepts a different kind of
+repository; it cannot install this project. See [installation troubleshooting](#installation-troubleshooting)
+if it reports “not a valid app repository”. HACS is not required.
+
+1. Download/clone [the project](https://github.com/PovilJ/adaptive-heating).
+   Download the numbered release ZIP and adjacent `.sha256` asset into `dist/`
+   if that release has been published, using a project checkout of the same
+   version. Alternatively, build both assets from the checkout:
+
+   ```sh
+   python3 scripts/build_release.py
+   ```
+
+   This produces `dist/adaptive_heating-0.1.0.zip` and its checksum. GitHub's
+   **Code → Download ZIP** is the project source and must be extracted and built;
+   it is not the installable component archive.
+
+2. Use a terminal with Python 3 and writable access to the actual Home Assistant
+   configuration directory. From the project directory, validate the archive:
 
    ```sh
    python3 scripts/install.py dist/adaptive_heating-0.1.0.zip --config /config --check
    ```
+
+   `/config` must be the target house's HA configuration directory as seen from
+   that terminal. If it is mounted elsewhere, substitute that path. Running the
+   command on a laptop does not install anything on a remote HA instance. The
+   installer reads the target's `.HA_VERSION`; if that file is absent, pass
+   `--ha-version` with the actual installed HA version to both commands.
 
 3. Install when ready:
 
@@ -99,6 +137,22 @@ controller's enable flag to this input during migration.
 On the second house, repeat setup using its own entities. Learned parameters and
 targets are stored through Home Assistant's storage API; they are not in the Git
 repository or release archive. No copying of `.storage` between houses is needed.
+
+### Installation troubleshooting
+
+**“https://github.com/PovilJ/adaptive-heating.git is not a valid app repository”**
+means the URL was submitted to the Apps repository manager. Apps are separate
+applications; this repository supplies a custom integration loaded from
+`custom_components/adaptive_heating/`. Removing `.git` from the URL will not
+change its type. See Home Assistant's [app repository format](https://developers.home-assistant.io/docs/apps/repository/)
+and [custom integration location](https://developers.home-assistant.io/docs/creating_integration_file_structure/#where-home-assistant-looks-for-integrations).
+
+Use the package steps above. After installation, confirm that the HA configuration
+directory contains `custom_components/adaptive_heating/manifest.json` directly,
+restart Home Assistant, then add **Adaptive Heating** under **Devices & services**.
+If it is still missing, check HA's logs for an integration import/version error
+and confirm that the archive was not extracted into an extra nested directory.
+Adding a repository URL alone does not place the integration files in HA.
 
 ## Normal controls
 

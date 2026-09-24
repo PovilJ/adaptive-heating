@@ -1,5 +1,9 @@
 # Design and acceptance criteria
 
+For the rewrite's origin and progress, see [project history](HISTORY.md), the
+[legacy comparison and migration guide](MIGRATION.md), and the
+[preserved source snapshots](../legacy/README.md).
+
 ## Agreed product constraints
 
 - Preserve adaptive, anticipatory water-temperature control and indoor comfort.
