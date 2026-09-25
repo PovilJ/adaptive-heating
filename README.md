@@ -4,32 +4,43 @@ An experimental Home Assistant custom integration for predictive heat-pump water
 temperature control. It uses existing Home Assistant entities from any compatible
 device integration. Each installation owns its settings and learned response.
 
-**0.2.0 is an experimental development build.** The current suite has 81 passing
-tests against Home Assistant 2026.7.4, including isolated setup, options/reload,
-entity creation and unload/restoration with simulated device services. See the
-[validation record](docs/HISTORY.md#validation-evidence). The first house still
-runs 0.1.0 in Observe; loading 0.2.0, configuring the tank entities and observing
-a real disinfection cycle remain deployment steps. No real tank cycle has been
-started by this rewrite. Automatic heating field validation also remains pending.
+**0.3.0 is an experimental local development build.** It adds opt-in cold-night
+preparation, adaptive coasting/recovery, and optional AC assistance. All **169
+tests pass** in Python 3.14.7 with Home Assistant 2026.7.4 and simulated device
+services; see the
+[validation record](docs/HISTORY.md#validation-evidence). These changes have not
+been deployed or published by this work. The last recorded first-house read,
+on September 24, showed 0.1.0 in Observe. A current live installation, monitored
+tank cycle, and Automatic heating/AC field validation remain deployment steps.
 
 ## Origins and project status
 
 This is a rewrite of the original house-specific PyScript heating controller into
 a reusable integration. The original heating `0.3.2` and companion water
 disinfection `1.0.0` scripts are preserved in [the legacy archive](legacy/README.md).
-Integration `0.1.0` started its own version series. Version **0.2.0** adds optional
+Integration `0.1.0` started its own version series. Version **0.2.0** added optional
 tank disinfection using the normal tank setpoint, with a continuous measured hold,
 recovery journal, and shared heating/solar scheduling inputs. The rewrite includes
 behavior changes; see the [disinfection guide](docs/DISINFECTION.md).
+Version **0.3.0** adds a new implementation of cold-night preparation and
+coasting, with optional AC sessions and separate empirical cooldown learning.
+It does not reproduce the legacy script's strategy rules verbatim.
 
 - [Timeline, completed work and next milestones](docs/HISTORY.md)
 - [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
 - [Original source, dependencies and preservation checksums](legacy/README.md)
 - [Dashboard layout, reuse and rollback](docs/DASHBOARD.md)
 - [Disinfection setup, scheduling and recovery](docs/DISINFECTION.md)
+- [Cold-night planning, AC assistance and commissioning](docs/COLD_NIGHTS.md)
 
 ## What this build includes
 
+- Optional cold-night preparation using up to 24 hours of hourly weather,
+  measured comfort reserve and cooldown, with bounded preheat, coasting and
+  early floor recovery. Existing water slew limits remain authoritative.
+- Optional AC assistance with independent modes, external room feedback,
+  outdoor-temperature and session limits, manual ownership handling, restart
+  recovery, and measured session kWh when an AC power meter is configured.
 - Optional tank disinfection with independent Observe/Automatic/Off, continuous
   temperature hold, bounded timeout/restoration, and persistent cycle history.
 - UI entity selectors and editable options, with no house-specific IDs in code.
@@ -84,6 +95,15 @@ for normal temperature control.
 Return and supply temperatures are required only for model fitting. Without them
 the integration keeps using the heating curve and room feedback. The first model
 has a fixed three-hour lag; estimating the lag automatically is future work.
+They are also needed for cooldown calibration, which requires measured water
+near the low-water setting rather than merely a lowered target.
+
+Cold-night planning can optionally use a Sun entity and a protection thermometer
+in another room. AC assistance needs a `climate` entity with Heat/Off support
+and an external room temperature sensor; an AC electrical-power sensor is
+optional. No additional helpers are required. See the
+[setup guide](docs/COLD_NIGHTS.md#configuration-and-initial-use) for defaults and
+how these inputs affect control.
 
 The integration controls a water-temperature number, **not a compressor power
 switch**. Off means stop automatic writes; it does not turn off the heat pump.
@@ -134,7 +154,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    python3 scripts/build_release.py
    ```
 
-   This produces `dist/adaptive_heating-0.2.0.zip` and its checksum. GitHub's
+   This produces `dist/adaptive_heating-0.3.0.zip` and its checksum. GitHub's
    **Code → Download ZIP** is the project source and must be extracted and built;
    it is not the installable component archive.
 
@@ -142,7 +162,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    configuration directory. From the project directory, validate the archive:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config --check
+   python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config --check
    ```
 
    `/config` must be the target house's HA configuration directory as seen from
@@ -154,7 +174,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
 3. Install when ready:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config
+   python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config
    ```
 
    Alternatively extract the archive's `adaptive_heating` folder into
@@ -219,6 +239,30 @@ an estimate, not a guarantee, and remains unavailable until sufficient suitable
 observations have been collected. Model fitting uses stable ordinary-heating
 intervals and rejects detected disturbances; it cannot identify all internal gains.
 
+## Cold-night preparation and AC
+
+Cold-night planning defaults to disabled. Once configured, it can prepare the
+floor earlier, request a capped room-temperature reserve, and lower the water
+recommendation overnight while the measured reserve permits waiting. It allows
+for floor response and the time needed to raise water within the existing slew
+limits before recovery. Default 4 °C/hour increases and 2 °C/hour decreases can
+substantially limit how quickly heating demand shifts; the planner never bypasses
+those limits to meet a schedule.
+
+Cooldown learning describes empirical low-water operation, including possible
+residual floor heat. It is not a thermal-capacity or COP measurement. Expected
+sunshine may influence recovery timing, but contributes no invented warmth to the
+projection. Measured faster cooling, inadequate forecasts, or the optional
+protection room can prevent coasting. A sunny forecast is not a promise that the
+house can remain comfortable without more heat.
+
+AC assistance starts in Observe and requires both its own mode and main control
+to be Automatic before it can start an owned session. It only borrows an Off unit,
+returns it to Off after assistance, and respects external changes. Manual or
+automatic AC influence pauses affected model fitting, including a settling period.
+With no AC power meter, only the runtime cap applies; electricity and savings are
+not inferred. See [COLD_NIGHTS.md](docs/COLD_NIGHTS.md) before enabling either feature.
+
 ## Solar and battery policy
 
 Solar preheating defaults to disabled. Enabling it allows only a small increase
@@ -235,8 +279,10 @@ is needed. Missing/invalid measurements or a sampling gap reset qualification.
 
 ## Manual updates
 
-If you installed through HACS, use HACS for subsequent downloads/updates. Cancel any tank cycle and wait for confirmed normal-target restoration. Select
-Observe in both control modes before downloading, restart Home Assistant afterward, then check operation
+If you installed through HACS, use HACS for subsequent downloads/updates. Cancel
+any tank cycle and wait for confirmed normal-target restoration. Select Observe
+for main heating, tank disinfection and AC assistance, and wait for any owned AC
+session to confirm Off before downloading. Restart Home Assistant afterward, then check operation
 before re-enabling Automatic. HACS handles file replacement itself and does not
 run this project's installer or its pre-install Observe transition. Its downloads
 also do not create this project's `.adaptive_heating_backups` code copies. Keep
@@ -254,7 +300,8 @@ and minimum Home Assistant version before replacing integration files. Old code 
 kept in `/config/.adaptive_heating_backups/`; configuration entries and learned
 data stay in their normal HA storage. These code copies are not full HA backups.
 
-Controllers enter Observe before file replacement. Once installed, the update
+Controllers enter Observe and require tank/AC recovery to finish before file
+replacement. Once installed, the update
 card says **Restart required**. Restart when convenient and explicitly select
 Automatic after checking operation. No automatic restart occurs. If replacement
 fails, old code is restored; review the error before re-enabling Automatic. A
@@ -272,7 +319,7 @@ Core tests require only Python's standard library:
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/build_release.py
-python3 scripts/install.py dist/adaptive_heating-0.2.0.zip --config /config --check
+python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config --check
 ```
 
 For the real-HA import/schema and isolated lifecycle checks, create a separate Python 3.14

@@ -109,3 +109,34 @@ The pre-correction dashboard is saved locally as
 `heating-before-disinfection.json`; `heating-after-disinfection.json` is the
 read-back-verified replacement. Restore either through the Lovelace API. The
 original `heating-before-rewrite.json` remains the pre-migration backup.
+
+## Cold-night and AC panel (0.3.0)
+
+The offline generator accepts five additional optional mappings:
+
+| Mapping | Entity | Display |
+| --- | --- | --- |
+| `planner_status` | Cold-night plan sensor | Phase, reason, planned room target, conservative predicted minimum, cooling rate and calibration, forecast coverage, and available preparation/night/recovery/morning times. |
+| `ac_status` | AC assistance sensor | State and reason, commanded target, external room temperature, session deadline, and metering note. |
+| `ac_mode` | AC assistance mode select | Independent Off / Observe / Automatic control. |
+| `ac_power` | AC electrical power sensor | Current electrical watts and history. |
+| `ac_energy` | AC session electricity sensor | Current session kWh and history. |
+
+Any combination can be mapped. With none of these mappings, the existing three
+views and sections remain unchanged. Partial mappings omit the corresponding
+cards and graphs. Use the entity IDs actually assigned by Home Assistant; the
+updated example contains generic starting IDs.
+
+The Heating view adds **Cold-night preparation**. Activity & trends adds
+**Preparation & AC history** when status or meter mappings are supplied. Missing
+entities or attributes display waiting text or omit a value instead of inventing
+zero consumption. Times are displayed in Home Assistant's local time.
+
+The AC energy graph shows sampled consumption for each assistance session. It
+is not a lifetime meter or a savings calculation. Compare both systems across the
+full afternoon, night, and morning when assessing preparation. See
+[COLD_NIGHTS.md](COLD_NIGHTS.md) for control behavior and commissioning.
+
+The new cards use native Markdown, tiles, and history graphs. Existing optional
+card-mod decoration is cosmetic. Generating this panel writes a local JSON file;
+it does not change the installed dashboard, select Automatic, or operate the AC.

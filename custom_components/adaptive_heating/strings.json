@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Adaptive Heating",
-        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off.",
+        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -49,7 +49,29 @@
           "disinfection_timeout_hours": "Maximum cycle runtime (hours)",
           "disinfection_sample_seconds": "Maximum tank sample age and gap (seconds)",
           "disinfection_hot_water_state": "State that confirms hot-water operation",
-          "disinfection_idle_state": "State that confirms idle/off operation"
+          "disinfection_idle_state": "State that confirms idle/off operation",
+          "cold_night_enabled": "Enable forecast-driven cold-night preparation and coasting",
+          "preheat_ceiling": "Maximum room temperature during preparation (°C)",
+          "night_minimum": "Minimum room temperature during overnight coasting (°C)",
+          "floor_lead_hours": "Floor heating response / recovery lead time (hours)",
+          "prepare_hour": "Fallback preparation start hour (local, 0–23)",
+          "quiet_start_hour": "Overnight coasting starts at (local hour, 0–23)",
+          "morning_hour": "Expected useful morning sunshine / recovery hour (local, 0–23)",
+          "cold_threshold": "Cold-night forecast threshold (°C)",
+          "cold_drop": "Forecast temperature drop that warrants preparation (°C)",
+          "sun_entity": "Sun entity for sunset-aware preparation (optional)",
+          "protection_entity": "Other room temperature that can prevent overnight coasting (optional)",
+          "ac_entity": "AC climate entity for optional preparation assistance",
+          "ac_room_entity": "External temperature sensor in the AC room",
+          "ac_power_entity": "AC electrical power meter (optional; enables measured session budget)",
+          "ac_min_outdoor": "Lowest outdoor temperature permitted for AC assistance (°C; verify equipment)",
+          "ac_preheat_max": "Maximum room temperature for AC assistance (°C)",
+          "ac_max_session_minutes": "Maximum AC preparation session (minutes)",
+          "ac_min_on_minutes": "Minimum AC run (minutes; stops sooner for temperature/operating limits)",
+          "ac_min_off_minutes": "Minimum AC rest before another session (minutes)",
+          "ac_settle_minutes": "Exclude AC effects from learning after stopping (minutes)",
+          "ac_max_session_kwh": "AC session electricity budget when a meter is mapped (kWh)",
+          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)"
         }
       }
     },
@@ -65,14 +87,19 @@
       "tank_incomplete": "Select both the measured tank temperature and its normal tank target, or leave both empty.",
       "separate_tank_target": "Use the normal hot-water tank target, not the space-heating target.",
       "invalid_tank_target": "The tank number must be available, use °C or °F, and support the configured target within its minimum, maximum and step.",
-      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings."
+      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings.",
+      "invalid_planning_limits": "Check the night minimum, room target, preheat ceiling, floor delay and local hours. Morning must precede preparation, which must precede overnight coasting.",
+      "invalid_ac_limits": "Check the AC outdoor limit, ceiling, minimum/maximum run, rest time, sensor age and session electricity budget.",
+      "ac_active": "Select AC assistance Off and wait for confirmed restoration before changing settings.",
+      "ac_incomplete": "Select both an AC climate entity and an external room thermometer, or leave all AC mappings empty.",
+      "ac_heat_required": "The AC must support explicit Heat and Off modes."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Configure Adaptive Heating",
-        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off.",
+        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -117,7 +144,29 @@
           "disinfection_timeout_hours": "Maximum cycle runtime (hours)",
           "disinfection_sample_seconds": "Maximum tank sample age and gap (seconds)",
           "disinfection_hot_water_state": "State that confirms hot-water operation",
-          "disinfection_idle_state": "State that confirms idle/off operation"
+          "disinfection_idle_state": "State that confirms idle/off operation",
+          "cold_night_enabled": "Enable forecast-driven cold-night preparation and coasting",
+          "preheat_ceiling": "Maximum room temperature during preparation (°C)",
+          "night_minimum": "Minimum room temperature during overnight coasting (°C)",
+          "floor_lead_hours": "Floor heating response / recovery lead time (hours)",
+          "prepare_hour": "Fallback preparation start hour (local, 0–23)",
+          "quiet_start_hour": "Overnight coasting starts at (local hour, 0–23)",
+          "morning_hour": "Expected useful morning sunshine / recovery hour (local, 0–23)",
+          "cold_threshold": "Cold-night forecast threshold (°C)",
+          "cold_drop": "Forecast temperature drop that warrants preparation (°C)",
+          "sun_entity": "Sun entity for sunset-aware preparation (optional)",
+          "protection_entity": "Other room temperature that can prevent overnight coasting (optional)",
+          "ac_entity": "AC climate entity for optional preparation assistance",
+          "ac_room_entity": "External temperature sensor in the AC room",
+          "ac_power_entity": "AC electrical power meter (optional; enables measured session budget)",
+          "ac_min_outdoor": "Lowest outdoor temperature permitted for AC assistance (°C; verify equipment)",
+          "ac_preheat_max": "Maximum room temperature for AC assistance (°C)",
+          "ac_max_session_minutes": "Maximum AC preparation session (minutes)",
+          "ac_min_on_minutes": "Minimum AC run (minutes; stops sooner for temperature/operating limits)",
+          "ac_min_off_minutes": "Minimum AC rest before another session (minutes)",
+          "ac_settle_minutes": "Exclude AC effects from learning after stopping (minutes)",
+          "ac_max_session_kwh": "AC session electricity budget when a meter is mapped (kWh)",
+          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)"
         }
       }
     },
@@ -133,7 +182,12 @@
       "tank_incomplete": "Select both the measured tank temperature and its normal tank target, or leave both empty.",
       "separate_tank_target": "Use the normal hot-water tank target, not the space-heating target.",
       "invalid_tank_target": "The tank number must be available, use °C or °F, and support the configured target within its minimum, maximum and step.",
-      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings."
+      "disinfection_active": "Cancel disinfection and wait for normal tank target restoration before changing settings.",
+      "invalid_planning_limits": "Check the night minimum, room target, preheat ceiling, floor delay and local hours. Morning must precede preparation, which must precede overnight coasting.",
+      "invalid_ac_limits": "Check the AC outdoor limit, ceiling, minimum/maximum run, rest time, sensor age and session electricity budget.",
+      "ac_active": "Select AC assistance Off and wait for confirmed restoration before changing settings.",
+      "ac_incomplete": "Select both an AC climate entity and an external room thermometer, or leave all AC mappings empty.",
+      "ac_heat_required": "The AC must support explicit Heat and Off modes."
     }
   }
 }

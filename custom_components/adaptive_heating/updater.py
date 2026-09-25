@@ -74,6 +74,9 @@ class ReleaseManager:
                 # Wait for any in-flight controller command to finish, then pause
                 # each controller before replacing code. No automatic HA restart.
                 for controller in list(self.controllers):
+                    await controller.async_ac_mode("observe")
+                    if controller.ac.session or controller.ac.recovery_pending:
+                        raise HomeAssistantError("Wait for AC restoration before installing an update")
                     await controller.async_disinfection_mode("observe")
                     if controller.disinfection.blocks_heating:
                         raise HomeAssistantError("Wait for tank target restoration before installing an update")

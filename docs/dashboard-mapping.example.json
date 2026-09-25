@@ -27,6 +27,11 @@
     "disinfection_status": "sensor.adaptive_heating_disinfection_status",
     "disinfection_mode": "select.adaptive_heating_disinfection_mode",
     "disinfection_run": "button.adaptive_heating_run_disinfection",
-    "disinfection_cancel": "button.adaptive_heating_cancel_disinfection_and_restore"
+    "disinfection_cancel": "button.adaptive_heating_cancel_disinfection_and_restore",
+    "planner_status": "sensor.adaptive_heating_cold_night_plan",
+    "ac_status": "sensor.adaptive_heating_ac_assistance",
+    "ac_mode": "select.adaptive_heating_ac_assistance_mode",
+    "ac_power": "sensor.adaptive_heating_ac_electrical_power",
+    "ac_energy": "sensor.adaptive_heating_ac_session_electricity"
   }
 }

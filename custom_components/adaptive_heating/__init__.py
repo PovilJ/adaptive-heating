@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, PLATFORMS
 from .coordinator import HeatingCoordinator
@@ -20,6 +21,25 @@ async def async_setup_entry(hass, entry):
     await coordinator.async_load()
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    if coordinator.ac.configured or coordinator.ac.session or coordinator.ac.recovery_pending:
+        entry.async_on_unload(async_track_time_interval(hass, coordinator.async_ac_tick, timedelta(seconds=30)))
+
+        @callback
+        def ac_changed(event):
+            # Do not connect learning intervals across a transient AC operation
+            # even when it starts/stops between the five-minute evaluations.
+            if event.data["entity_id"] == coordinator.config.get("ac_entity"):
+                changed = (event.data.get("old_state"), event.data.get("new_state"))
+                if any(state is None or state.state not in ("off", "fan_only") for state in changed):
+                    coordinator.previous = None
+                    coordinator.room_history = []
+                    coordinator.coast_since = None
+                    coordinator.ac.blocked_until = max(coordinator.ac.blocked_until,
+                        dt_util.utcnow().timestamp() + coordinator.ac.settings.ac_settle_minutes * 60)
+            hass.async_create_task(coordinator.async_ac_tick())
+
+        watched = [coordinator.config.get(k) for k in ("ac_entity", "ac_room_entity")]
+        entry.async_on_unload(async_track_state_change_event(hass, [e for e in watched if e], ac_changed))
     if coordinator.disinfection.configured or coordinator.disinfection.blocks_heating:
         # The tank watcher has its own cadence; heating/model fitting stay at 5 min.
         entry.async_on_unload(async_track_time_interval(hass, coordinator.async_disinfection_tick, timedelta(seconds=30)))
@@ -71,4 +91,8 @@ async def async_remove_entry(hass, entry):
     saved = await store.async_load()
     # Even a failed-to-load entry must not erase its outstanding recovery journal.
     if not saved or (isinstance(saved, dict) and saved.get("cycle") is None):
+        await store.async_remove()
+    store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.ac")
+    saved = await store.async_load()
+    if not saved or (isinstance(saved, dict) and saved.get("session") is None):
         await store.async_remove()

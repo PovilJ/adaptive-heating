@@ -213,6 +213,76 @@ Adaptive Heating has not sent a water target since this restart.
         ]),
     ]
 
+    # Every new mapping is optional, including the status entities. Older
+    # installations keep their existing dashboard and never reference new IDs.
+    planner_summary = markdown("""<ha-icon icon="mdi:weather-night"></ha-icon> **COLD-NIGHT PLAN**
+
+{% set status = states('@planner_status@') %}
+{% if status in ['unknown', 'unavailable'] %}
+### Waiting for planner
+The planner status is unavailable. This card does not confirm that preparation or overnight coasting is active.
+{% else %}
+### {{ status | replace('_', ' ') | capitalize }}
+{{ state_attr('@planner_status@', 'reason') or 'Waiting for an explanation.' }}
+
+{% set target = state_attr('@planner_status@', 'effective_target') %}
+{% if is_number(target) %}Current planned room target **{{ target | float | round(1) }} °C**{% endif %}
+
+{% set minimum = state_attr('@planner_status@', 'predicted_minimum') %}
+{% if is_number(minimum) %}Projected room minimum **{{ minimum | float | round(1) }} °C**{% endif %}
+
+{% set rate = state_attr('@planner_status@', 'cooling_rate') %}
+{% if is_number(rate) %}Cooling estimate **{{ rate | float | round(2) }} °C/h** · {{ 'calibrated from observations' if state_attr('@planner_status@', 'calibrated') else 'initial estimate; still learning' }}{% endif %}
+
+{% set horizon = state_attr('@planner_status@', 'forecast_hours') %}
+{% if is_number(horizon) %}Forecast coverage **{{ horizon | float | round(1) }} hours**{% endif %}
+
+{% set lead = state_attr('@planner_status@', 'effective_recovery_lead_hours') %}
+{% if is_number(lead) %}Recovery allowance **{{ lead | float | round(1) }} hours**, including water-temperature changes and the floor response.{% endif %}
+
+{% for key, label in [('prepare_at', 'Preparation from'), ('night_start', 'Night begins'), ('recovery_at', 'Recovery from'), ('morning_at', 'Morning planning boundary')] %}
+{% set when = as_datetime(state_attr('@planner_status@', key), default=none) %}
+{% if when %}{{ label }} **{{ as_local(when).strftime('%d %b, %H:%M') }}**
+
+{% endif %}{% endfor %}
+{% endif %}
+
+The plan is revised as measurements and forecasts change. Expected sunshine through the windows is separate from electrical PV surplus.""") if e.get("planner_status") else None
+
+    ac_summary = markdown("""<ha-icon icon="mdi:air-conditioner"></ha-icon> **AC ASSISTANCE**
+
+{% set status = states('@ac_status@') %}
+{% if status in ['unknown', 'unavailable'] %}
+### Waiting for AC controller
+The AC status is unavailable. Check the integration before enabling assistance.
+{% else %}
+### {{ status | replace('_', ' ') | capitalize }}
+{{ state_attr('@ac_status@', 'reason') or 'Waiting for an explanation.' }}
+
+{% set target = state_attr('@ac_status@', 'commanded_target') %}
+{% if is_number(target) %}Session target **{{ target | float | round(1) }} °C**{% endif %}
+
+{% set room = state_attr('@ac_status@', 'external_room_temperature') %}
+{% if is_number(room) %}External room thermometer **{{ room | float | round(1) }} °C**{% endif %}
+
+{% set deadline = as_datetime(state_attr('@ac_status@', 'deadline'), default=none) %}
+{% if deadline %}Session ends by **{{ as_local(deadline).strftime('%d %b, %H:%M') }}**{% endif %}
+
+{{ state_attr('@ac_status@', 'energy_budget_note') or '' }}
+{% endif %}
+
+AC assistance has its own control mode. The unit may also be operated manually; its room-temperature effect is excluded from floor-heating learning.""") if e.get("ac_status") else None
+
+    if any(e.get(key) for key in ("planner_status", "ac_status", "ac_mode", "ac_power", "ac_energy")):
+        overview_sections.append(section("Cold-night preparation", "mdi:weather-night", [
+            planner_summary,
+            ac_summary,
+            tile("ac_mode", "AC assistance mode", "mdi:air-conditioner", 12, "indigo", [{"type": "select-options", "style": "dropdown"}]),
+            tile("ac_power", "AC electrical power", "mdi:lightning-bolt", color="amber"),
+            tile("ac_energy", "AC session electricity", "mdi:counter", color="amber"),
+            markdown("Preheating uses electricity earlier. Compare comfort and both systems' full afternoon-and-night consumption before judging the result. AC session electricity is only the measured consumption for that assistance session.") if e.get("ac_energy") else None,
+        ]))
+
     decision_table = markdown("""{% macro temp(value) %}{{ (value | round(1) | string) + '°' if value is not none else '—' }}{% endmacro %}
 {% set entries = state_attr('@status@', 'recent_decisions') or [] %}
 | Time | Status | Proposed | Allowed | Sent | Device |
@@ -277,6 +347,14 @@ The latest 20 cycle events survive restarts. Completion means the configured tem
             markdown("**Sustained solar surplus:** {{ 'Detected' if state_attr('@status@', 'sustained_solar_surplus') else 'Not detected' }}\n\nSolar preheating also needs to be enabled in the integration settings."),
         ]),
     ]
+
+    if any(e.get(key) for key in ("planner_status", "ac_status", "ac_power", "ac_energy")):
+        activity_sections.append(section("Preparation & AC history", "mdi:weather-sunset-down", [
+            graph("Preparation and assistance · 24 hours", [("planner_status", "Plan", "#a89fe8"), ("ac_status", "AC", "#64b5f6")]) if e.get("planner_status") or e.get("ac_status") else None,
+            graph("AC electrical power · 24 hours", [("ac_power", "AC power", "#f5a646")]) if e.get("ac_power") else None,
+            graph("AC session electricity · 24 hours", [("ac_energy", "Session kWh", "#f5a646")]) if e.get("ac_energy") else None,
+            markdown("Session electricity restarts for each assistance session; it is not a lifetime energy meter. A missing reading is unknown, not zero consumption.") if e.get("ac_energy") else None,
+        ]))
 
     equipment_sections = [
         section("Heat pump", "mdi:heat-pump-outline", [
