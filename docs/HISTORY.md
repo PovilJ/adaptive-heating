@@ -1,16 +1,21 @@
 # Project history and status
 
-Last reviewed: **2026-09-25**. Current local source version: **0.3.0, experimental**.
-The last recorded first-house read, on **2026-09-24**, showed **0.1.0 in Observe**;
-the 0.3.0 work did not deploy, publish, or re-read the live installation.
+Last reviewed: **2026-10-08**. Current local source version: **0.3.1, experimental**.
+Version 0.3.1 is installed and restarted in the first house. Live checks on Home
+Assistant 2026.9.3 confirm Automatic evaluates while heating mode is enabled
+(`4.0`) and compressor activity is OFF. The first recommendation was 31.68 °C;
+the allowed/current water target remained 25 °C under startup rate limits and
+the 30-minute command interval. Tank scheduling Off, AC Observe and the 22 °C
+room target were restored. Device acknowledgment and room recovery over hours
+remain field-validation work.
 
 Adaptive Heating began as house-specific PyScript code. The rewrite keeps the
 goal of adaptive, anticipatory water-temperature control and makes it a standalone
 Home Assistant integration: install the same release at each house, select local
 entities in the UI, and keep each house's settings and learning in its HA instance.
 The space-heating rewrite is implemented; commissioning and field validation
-remain open. Version 0.2.0 adds a coordinated tank disinfection controller; live
-installation and a monitored tank cycle remain pending.
+remain open. Version 0.2.0 adds a coordinated tank disinfection controller, now
+installed and mapped; a monitored tank cycle remains pending.
 Version 0.3.0 adds optional cold-night preparation, empirical cooldown learning,
 coasting/recovery and bounded AC sessions. These are local implementation and
 test results, not evidence of comfort or electricity savings in the house.
@@ -27,6 +32,7 @@ test results, not evidence of comfort or electricity savings in the house.
 | 2026-09-24 — first-house installation and dashboard migration | HACS reports installed commit `0a65aba`; the integration entry is loaded on HA 2026.7.4 in Observe. Rebuilt the heating dashboard into Heating, Activity & trends, and Equipment views, using the new controls and decision records. | Live REST/WebSocket reads, dashboard save/read-back, template rendering and Chrome inspection. Old heating enable helper is off; the heat pump reports OFF, so the new controller is paused and has sent no command. [Dashboard record and rollback](DASHBOARD.md). This establishes installation and UI migration, not an Automatic cutover or field-performance validation. |
 | 2026-09-24 — setpoint-based disinfection rewrite | Integration 0.2.0 adds optional tank mappings, independent modes, continuous fresh-temperature hold, enforced timeout, command acknowledgment, persisted restoration/history, manual-override handling, and heating/solar/battery scheduling. Corrected dashboard controls after the owner confirmed deleting PyScript. | [Disinfection design and operation](DISINFECTION.md). 81 tests pass with HA 2026.7.4, including an isolated setup/options/reload/unload and simulated tank restoration. Live dashboard save/read-back and template checks verify the UI correction. Integration 0.2.0 is not yet loaded on the real HA; no real tank cycle or temperature command was issued. |
 | 2026-09-25 — cold-night preparation and AC assistance | Local integration 0.3.0 adds opt-in preparation/coasting/recovery, up to 24-hour weather coverage, separate low-water cooldown learning, optional room protection, independent AC Observe/Automatic/Off with owned-session recovery and optional sampled electrical budgets, plus offline dashboard cards. | [Cold-night guide](COLD_NIGHTS.md) and the automated checks below. Owner reported successful use of the old PyScript last winter and a usual 22–23 °C to approximately 20 °C overnight drop; these are qualitative observations, not imported model data. No live equipment operation, deployment or publication was performed for 0.3.0. |
+| 2026-10-08 — floor-memory and anticipatory recovery, 0.3.1 | Separated heating mode from compressor activity, retained slow floor heat through pauses, added sustained forecast/cooling preparation and bounded recovery assistance, and updated two dashboard cards. Installed all 21 component files, restarted HA, verified options and restored the owner's existing Automatic/Off/Observe modes. | 205 tests pass with simulated devices on HA 2026.7.4. Live 0.3.1 reports loaded on HA 2026.9.3, heating enabled and compressor idle; recommendation 31.68 °C, startup-limited water target 25 °C. Source and dashboard read-back, template rendering and zero integration log entries verified. No hardware setpoint change or room recovery is claimed from this initial evaluation. |
 
 Legacy heating `0.3.2`, disinfection `1.0.0` and integration `0.1.0` are three
 separate version histories. The smaller integration number does not indicate a
@@ -38,17 +44,17 @@ downgrade of the legacy script. No intervening legacy releases are archived here
 | --- | --- | --- |
 | Source preservation | Committed in `b063640` | Both supplied scripts remain unchanged; their checksums and known gaps are recorded. |
 | Reusable integration | Implemented; automated coverage | Entity selection and tuning use HA configuration entries/options. Learned parameters and the room target are stored per entry, outside Git and release archives. |
-| Heating controller | Implemented; automated coverage | Curve and room feedback plus a bounded learned forecast correction. This is changed behavior, not complete legacy feature parity; see the [comparison](MIGRATION.md#behavior-and-feature-disposition). |
-| Cold-night planning | Implemented locally in 0.3.0; default disabled | Adaptive room reserve and conservative low-water cooldown support preparation, coasting and early recovery while existing water rate limits remain authoritative. No COP, tariff or thermal-capacity optimizer. |
-| AC assistance | Implemented locally in 0.3.0; initial Observe | Optional external thermometer and climate mapping; starts only with both controllers Automatic, borrows an Off unit, bounds sessions, detects manual edits, persists recovery and excludes AC-influenced learning. A power meter enables sampled session-kWh accounting; otherwise only runtime is bounded. |
+| Heating controller | Installed 0.3.1; Automatic restored | Curve/forecast/room-trend feedback and bounded learned correction/recovery. Enabled-but-idle evaluation verified; representative equipment operation remains open. See the [comparison](MIGRATION.md#behavior-and-feature-disposition). |
+| Cold-night planning | Installed; enabled in the first house, default disabled elsewhere | Adaptive room reserve and conservative low-water cooldown support preparation, coasting and early recovery while existing water rate limits remain authoritative. No COP, tariff or thermal-capacity optimizer. |
+| AC assistance | Installed and mapped; Observe restored | Optional external thermometer and climate mapping; starts only with both controllers Automatic, borrows an Off unit, bounds sessions, detects manual edits, persists recovery and excludes AC-influenced learning. A power meter enables sampled session-kWh accounting; otherwise only runtime is bounded. |
 | Command handling and diagnostics | Implemented; automated coverage | Operating-state/inhibit gates, final limits and device steps, manual-change holds, Observe on restart, and separate proposed/limited/commanded/actual values. |
-| Installation and manual updates | Implemented; automated coverage | Component-only ZIP and checksum, validated installation, code backups and explicit update/restart controls. A real HA installation/update/recovery trial is still needed. |
-| Installation by repository URL | First-house HACS installation observed | HACS reports `0a65aba`, and integration 0.1.0 is loaded on HA 2026.7.4. Later HACS update/restart/recovery trials remain pending. The HA Apps repository screen remains a different installation mechanism. |
+| Installation and manual updates | Manual 0.3.1 update/restart verified | Component-only ZIP/checksum validates 21 files. File editor API installation and source read-back, HA restart, options save/read-back and mode restoration are verified. Interrupted hardware-session recovery remains simulated. |
+| Installation by repository URL | Earlier HACS installation; latest update installed manually | Before the manual update HACS reported commit `cb33aec` and the integration reported 0.3.0. HACS's repository metadata is separate from the verified running integration version 0.3.1. The HA Apps repository screen remains a different installation mechanism. |
 | HA compatibility | Automated checks target HA 2026.7.4 | Isolated setup, platform/entity creation, options/reload and simulated recovery checks establish software compatibility within that environment. Hardware/network behavior still needs field validation. The version-specific results below preserve their original scope. |
-| Live use and another house | Installed in first house; Observe trial started | Entity reads and migrated dashboard verified while the heat pump was OFF. Automatic cutover, representative heating observations, comfort/energy comparison and a second-house trial remain pending. |
-| Dashboard | Existing views verified live on September 24; new 0.3.0 panels generated offline | Optional native cards add plan reasons, targets, forecast/cooldown diagnostics and AC status/metering. Their templates are tested with isolated HA. New panels have not been applied to the live dashboard. |
+| Live use and another house | First-house Automatic restored after update | Ordinary compressor idle no longer blocks evaluation. Device acknowledgment, representative heating observations, comfort/energy comparison and a second-house trial remain pending. |
+| Dashboard | Three live views; two cards updated and rendered October 8 | Native cards add plan reasons, targets, forecast/cooldown diagnostics, floor/recovery learning and AC status/metering. Other live layout changes were preserved. |
 | Published release | None published as of 2026-09-24 | Checked with the GitHub releases API. HACS can install `main` without a release; the built-in stable-release updater needs published release assets. |
-| Domestic-hot-water disinfection | Implemented in 0.2.0; automated validation | Replaces the legacy normal-setpoint boost with continuous hold and recovery. Disabled from commanding by initial Observe mode. Live update/configuration, first verified cycle, and field validation remain pending. |
+| Domestic-hot-water disinfection | Installed and mapped; scheduling Off restored | Replaces the legacy normal-setpoint boost with continuous hold and recovery. A first monitored cycle and field validation remain pending. |
 
 ## Validation evidence
 
@@ -111,12 +117,99 @@ downgrade of the legacy script. No intervening legacy releases are archived here
 
 ## Next milestones
 
+### October 8 local correction: compressor cycles and floor memory
+
+Live reads showed Automatic control paused on an OFF activity sensor while the
+Versati heating-mode number remained `4.0`; the room was 21.7 °C against a
+22 °C target and the water target was 26 °C. OFF described a compressor pause,
+not disabled heating. The corrected local build adds a separately configured
+heating-mode mapping (numeric `4` / `4.0` match), permits bounded water changes
+during confirmed idle heating, and learns both floor charging and cooling.
+Activity/defrost events preserve short cycles between five-minute evaluations.
+Stored floor heat decays over a configurable response time rather than resetting
+when the compressor stops. AC operation and settling exclude fitting; valid
+temperature observations continue through ordinary idle, tank and defrost phases.
+Sunshine labels no longer exclude response fitting. Predictions include water
+recovery before floor warming, and night recovery reserves the configured delay.
+
+The full suite passed **187 tests with no skips** using Python 3.14.7 and Home
+Assistant 2026.7.4. Device actions were simulated. The installed coordinator
+matched the original source baseline, and live source/options were backed up
+locally. At that validation stage no heating command, live configuration
+change, installation or restart had been performed. Automatic lag identification and
+field validation remain outstanding.
+
+### October 8 legacy and external-controller review
+
+Reviewed the archived controller against the owner's report of good operation
+last winter. An offline harness with fake HA state/services confirmed that the
+legacy cycle continues with compressor activity OFF, reproduced inconsistent
+momentum/final-rate-limit paths, and compared early forecast recommendations
+against the new untrained basic curve. Read-only HA checks found the existing
+loss/gain helpers at 0.01567/0.03318; their calibration date is unknown. Both
+archived checksums still match. The comparison does not establish field comfort
+or electricity savings, and no runtime code was changed for this review.
+
+The owner supplied ESPHome Ecodan as a reference. Reviewed its adaptive-control
+documentation and relevant source at commit
+`a64d1b05cd3b53b708df675e010bfa0404f2c410`, plus its link to the separate ODIN
+optimizer guide. Useful ideas include enabled-mode/activity separation,
+floor-specific feedback timing, gradual assistance for a stalled recovery,
+cooldown learning and expected-versus-measured temperature comparisons. No
+external implementation was copied or installed. Detailed findings and
+limitations are in the [dated migration review](MIGRATION.md#review-against-the-working-controller--october-8-2026).
+
+### October 8 anticipatory recovery improvement — 0.3.1
+
+Implemented sustained cold-forecast preparation before model calibration,
+including the configured floor response and the time to raise water. Added a
+30–60 minute continuous room-temperature trend, bounded early cooling
+compensation, and gradual assistance after below-target recovery has stalled
+for the floor-response allowance. A cold falling room cannot lower ordinary
+floor heat; intentional night coasting/ceiling reductions remain separate.
+All final actuator, cadence, device-step and operating/ownership checks remain
+authoritative. AC operation and settling clear recovery feedback and exclude
+model fitting. Floor response is still configured, not automatically learned.
+
+The full Python 3.14.7 / HA 2026.7.4 suite passes **205 tests with no skips**.
+New cases exercise day-one/distant/spurious cold forecasts, water-ramp lead,
+cooling before target, recovery timing/decay/gaps/AC, command-limit preservation,
+and real-HA rendering of dashboard floor/recovery diagnostics. These are
+simulated-device results, not evidence of improved field comfort or savings.
+Version metadata identifies the new build as 0.3.1.
+
+### October 8 authorized live installation and restart
+
+After the owner explicitly requested pushing Git, updating Adaptive Heating and
+restarting, installed the complete validated artifact through the File editor
+API. All 21 files matched the previous repository baseline before the update
+and the new artifact after writing. Updated only the decision and floor/recovery
+dashboard cards through the Lovelace API; read-back and live template rendering
+passed. Backups, previous options and latest control modes are kept in the
+ignored `.local/deployment-0.3.1/` directory. The installer was adapted to File
+editor's `text/json` response after an initial write/rollback; the original
+source was verified again before the completed installation.
+
+Restarted HA and verified integration 0.3.1 loaded on **HA 2026.9.3**. The
+automated suite targets 2026.7.4; the newer live version has runtime checks,
+not a repeated full automated suite. Saved/read-back the Versati heating mode
+mapping (`4`, matching `4.0`), idle state OFF and configured three-hour response.
+Restored the latest pre-update modes: main Automatic, tank Off and AC Observe,
+with the existing 22 °C room target. The first Automatic evaluation reported
+heating enabled, compressor inactive, status maintaining, recommendation
+31.68 °C and allowed/actual target 25 °C under startup slew limits. No integration
+log entries were present. AC startup/settling exclusion is active and accepted
+learning hours are initially zero. Device command acknowledgment, learned
+response and room recovery are not established by this initial evaluation.
+
+
 These are pending work, not promised release dates or completed acceptance checks.
 
-1. **Deployment validation:** isolated setup/options/reload/unload now pass; verify
-   live entity units, state labels and device limits; exercise a numbered install, update,
-   restart and recovery. The initial live HACS installation is now recorded;
-   update/restart/recovery checks and recording the exact HACS version remain.
+1. **Deployment validation:** isolated setup/options/reload/unload and the live
+   0.3.1 update/restart/options/mode restoration now pass. Continue checking
+   command acknowledgment, representative input freshness/state labels and
+   interrupted hardware-session recovery. HACS metadata synchronization remains
+   separate from this verified manual installation.
 2. **First-house Observe trial:** follow the [migration guide](MIGRATION.md),
    resolve old-writer and shared-helper dependencies, observe ordinary heating,
    hot water, defrost, missing inputs and manual changes; compare predictions
@@ -134,9 +227,9 @@ These are pending work, not promised release dates or completed acceptance check
    select a repository license, and publish tested assets with release notes
    using the [release procedure](RELEASING.md).
 
-Before enabling tank scheduling, install a build including the 0.2.0 tank
-controller, configure tank mappings and
-monitor the explicit first cycle. The legacy completion timestamp is not imported.
+Before enabling tank scheduling, monitor an explicitly requested first cycle
+using the installed controller and mappings. The legacy completion timestamp
+is not imported.
 
 Later candidates are automatic lag identification, fuller multi-room planning,
 rolling prediction-error evaluation, learned window-gain timing, measured

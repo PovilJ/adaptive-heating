@@ -4,14 +4,18 @@ An experimental Home Assistant custom integration for predictive heat-pump water
 temperature control. It uses existing Home Assistant entities from any compatible
 device integration. Each installation owns its settings and learned response.
 
-**0.3.0 is an experimental local development build.** It adds opt-in cold-night
-preparation, adaptive coasting/recovery, and optional AC assistance. All **169
+**0.3.1 is an experimental build.** It improves ordinary
+forecast preparation and gradual floor recovery, alongside opt-in cold-night
+planning and optional AC assistance. All **205
 tests pass** in Python 3.14.7 with Home Assistant 2026.7.4 and simulated device
 services; see the
-[validation record](docs/HISTORY.md#validation-evidence). These changes have not
-been deployed or published by this work. The last recorded first-house read,
-on September 24, showed 0.1.0 in Observe. A current live installation, monitored
-tank cycle, and Automatic heating/AC field validation remain deployment steps.
+[validation record](docs/HISTORY.md#validation-evidence). Installed in the first
+house on October 8 and verified after restart on Home Assistant 2026.9.3:
+Automatic evaluates normally while heating is enabled and the compressor is
+idle. Water changes still obey startup rate limits and the command interval.
+A monitored tank cycle, representative heating/AC operation and measured
+comfort/energy comparisons remain field-validation steps. No numbered GitHub
+release is published by this installation.
 
 ## Origins and project status
 
@@ -25,6 +29,9 @@ behavior changes; see the [disinfection guide](docs/DISINFECTION.md).
 Version **0.3.0** adds a new implementation of cold-night preparation and
 coasting, with optional AC sessions and separate empirical cooldown learning.
 It does not reproduce the legacy script's strategy rules verbatim.
+Version **0.3.1** separates heating enablement from compressor activity, retains
+floor heat across pauses, and adds forecast/trend preparation and bounded
+assistance for sustained failed recovery.
 
 - [Timeline, completed work and next milestones](docs/HISTORY.md)
 - [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
@@ -47,6 +54,12 @@ It does not reproduce the legacy script's strategy rules verbatim.
 - Observe (default), Automatic, and Off modes; an integration-owned room target.
 - Weather compensation, room feedback, and a bounded predictive correction from
   an empirical model with a lagged heat-emitter state.
+- Forecast preparation from day one: two consecutive cold forecast hours can
+  raise the curve ahead of the floor delay and water ramp, without waiting for
+  model calibration. Future warming does not lower this baseline early.
+- A continuous 30–60 minute room trend provides bounded early cooling response.
+  Gradual recovery assistance waits for the configured floor response, increases
+  by 0.5 °C per command interval up to 2 °C, and decays as the room warms.
 - Persistent per-installation model coefficients and target; mapping changes
   reset the model. Every startup or settings reload returns to Observe.
 - Unit conversion for °C/°F and W/kW, fresh-temperature checks, operating-state,
@@ -92,9 +105,12 @@ or template sensors to expose charging/discharging separately. The sign meaning
 must be checked for that inverter. Battery and solar inputs are never mandatory
 for normal temperature control.
 
-Return and supply temperatures are required only for model fitting. Without them
-the integration keeps using the heating curve and room feedback. The first model
-has a fixed three-hour lag; estimating the lag automatically is future work.
+Return and supply temperatures are needed to learn active floor charging. Valid
+idle cooling observations can continue with the retained floor state even when
+circuit temperatures are unavailable. Without enough suitable observations the
+integration keeps using the heating curve and room feedback. The model starts
+with a configurable three-hour floor response time; identifying that time
+automatically remains future work.
 They are also needed for cooldown calibration, which requires measured water
 near the low-water setting rather than merely a lowered target.
 
@@ -107,9 +123,21 @@ how these inputs affect control.
 
 The integration controls a water-temperature number, **not a compressor power
 switch**. Off means stop automatic writes; it does not turn off the heat pump.
-Hot-water, defrost, off or unknown operating states prevent space-heating writes. A configured
+Hot-water, defrost, unknown operating states, and OFF without separate heating-mode
+confirmation prevent space-heating writes. A configured
 inhibit input also blocks writes when on or unavailable. Map the existing
 controller's enable flag to this input during migration.
+
+If the operating-state sensor reports OFF between normal compressor cycles,
+map a separate **Heating-mode entity** and its enabled value. This permits water
+target adjustments in the configured idle state while heating mode is enabled.
+For the first-house Versati, use
+`number.versati_modbus_esp32_versati_2_mode_set`, enabled value `4`, and idle
+activity `OFF`; numeric values `4` and `4.0` match. Keep the existing activity
+sensor for active heating and hot-water detection. Both active and idle intervals
+train the response model while retaining estimated stored floor heat. Unavailable mode/activity, other operating states,
+hot water, defrost and inhibits continue to block commands. Without this optional
+mapping the original active-heating requirement remains in effect.
 
 ## First installation through HACS
 
@@ -154,7 +182,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    python3 scripts/build_release.py
    ```
 
-   This produces `dist/adaptive_heating-0.3.0.zip` and its checksum. GitHub's
+   This produces `dist/adaptive_heating-0.3.1.zip` and its checksum. GitHub's
    **Code → Download ZIP** is the project source and must be extracted and built;
    it is not the installable component archive.
 
@@ -162,7 +190,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    configuration directory. From the project directory, validate the archive:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config --check
+   python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config --check
    ```
 
    `/config` must be the target house's HA configuration directory as seen from
@@ -174,7 +202,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
 3. Install when ready:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config
+   python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config
    ```
 
    Alternatively extract the archive's `adaptive_heating` folder into
@@ -236,8 +264,27 @@ does not overwrite an externally selected setpoint outside its configured limits
 The predicted minimum is conditional on the **proposed** water temperature and
 available forecast horizon. Actual commands may differ because of limits. It is
 an estimate, not a guarantee, and remains unavailable until sufficient suitable
-observations have been collected. Model fitting uses stable ordinary-heating
-intervals and rejects detected disturbances; it cannot identify all internal gains.
+observations have been collected. Model fitting uses valid room/outdoor readings
+and known floor-heating activity across heating and cooling intervals. Hot-water
+and defrost pause floor commands while the floor's residual heat continues to be
+observed. AC operation and settling exclude affected learning; invalid data and
+abrupt unexplained residuals cannot establish a fit. Sunshine labels do not turn
+off this learning, but the fitted loss remains empirical: unknown solar/internal
+gains can bias it. Predictions include the water ramp before slow floor response.
+
+Ordinary forecast preparation also works while the model learns. A sustained cold
+drop within the floor-response and water-ramp lead raises the weather curve;
+a single cold forecast point cannot do so. Room cooling is estimated from at
+least 30 minutes of continuous measurements and can add at most 2 °C to the water
+recommendation before the room drops below target. If a below-target room still
+fails to recover after the configured floor response, assistance starts at
+0.5 °C and increases by 0.5 °C per command interval, capped at 2 °C. It decays at
+1 °C/hour when the room improves and clears at target, on an observation gap,
+or when AC/operating conditions exclude it. A cold, falling room cannot authorize
+an ordinary water reduction; deliberate night coasting and ceiling reductions
+retain their separate comfort policy. Every final command still obeys water
+limits, device steps and rise/fall rates. The floor response remains a configured
+estimate, initially three hours; it is not automatically identified.
 
 ## Cold-night preparation and AC
 
@@ -319,7 +366,7 @@ Core tests require only Python's standard library:
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/build_release.py
-python3 scripts/install.py dist/adaptive_heating-0.3.0.zip --config /config --check
+python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config --check
 ```
 
 For the real-HA import/schema and isolated lifecycle checks, create a separate Python 3.14

@@ -124,6 +124,29 @@ class DashboardTemplates(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("None", content)
         self.assertIsNone(re.search(r"@[a-z_]+@", content))
 
+    async def test_floor_recovery_diagnostics_render_cooling_warming_and_missing_data(self):
+        dashboard = builder.build(mapping_with(*OPTIONAL))
+        self.templates = [card["content"] for card in walk(dashboard)
+                          if card.get("type") == "markdown" and
+                          ("Floor response & recovery" in card["content"] or "Heating is enabled" in card["content"])]
+        self.assertIn("at least 30 minutes", self.render())
+        attributes = {"heating_enabled": True, "compressor_active": False,
+            "floor_response_hours": 3, "learning_heating_hours": 2,
+            "learning_idle_hours": 4, "water_recovery_assistance_celsius": .5,
+            "learning_excluded_by_ac": True}
+        for rate, expected in ((.2, "cooling at **0.2 °C/h**"), (-.2, "warming at **0.2 °C/h**"), (0, "holding steady")):
+            self.hass.states.async_set(EXAMPLE["entities"]["status"], "observing",
+                attributes | {"observed_room_cooling_celsius_per_hour": rate})
+            content = self.render()
+            self.assertIn(expected, content)
+            self.assertIn("compressor paused between cycles", content)
+            self.assertIn("3.0 hours", content)
+            self.assertIn("2.0 h heating", content)
+            self.assertIn("4.0 h floor cooling", content)
+            self.assertIn("0.5 °C", content)
+            self.assertIn("AC operation or settling", content)
+            self.assertNotIn("None", content)
+
 
 if __name__ == "__main__":
     unittest.main()

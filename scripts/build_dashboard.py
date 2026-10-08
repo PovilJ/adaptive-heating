@@ -105,8 +105,8 @@ Space-heating writes and learning are stopped. Disinfection has its own control 
 
 {% set status = states('@disinfection_status@') %}
 {% if status in ['unknown', 'unavailable'] %}
-### Update required
-The old PyScript controls are retired. Install Adaptive Heating 0.2.0 or newer and configure the tank entities to use the replacement. This card does not confirm that a schedule is running.
+### Waiting for disinfection status
+The controller status is unavailable. Check the integration and tank configuration.
 {% else %}
 ### {{ status | replace('_', ' ') | capitalize }}
 {{ state_attr('@disinfection_status@', 'reason') }}
@@ -124,7 +124,7 @@ Last verified cycle: **{{ as_local(as_datetime(finished)).strftime('%d %b %Y, %H
 {% set timeout = state_attr('@disinfection_status@', 'timeout_at') %}
 {% if timeout %}Cycle timeout: **{{ as_local(as_datetime(timeout)).strftime('%H:%M') }}**{% endif %}
 {% endif %}""", accent="77, 157, 224") if e.get("disinfection_status") else markdown(
-        "**Disinfection is not connected to this dashboard.** Configure the integration's tank entities and map its disinfection controls. Retained legacy helpers do not prove a scheduler is running.") if e.get("tank") else None
+        "**Disinfection is not connected to this dashboard.** Configure the integration's tank entities and map its disinfection controls.") if e.get("tank") else None
 
     comfort = markdown("""<ha-icon icon="mdi:home-thermometer-outline"></ha-icon> **LIVING SPACE**
 
@@ -149,8 +149,12 @@ Target **{{ target | float | round(1) }} °C** · {% if delta < 0 %}{{ -delta }}
 {% endif %}
 
 {% if state == 'paused' and unit | upper == 'OFF' and reason.startswith('Space-heating state') %}
-The heat pump reports **OFF**. A new recommendation will appear when space heating is confirmed.
+The activity sensor reports **OFF**. Heating availability has not been confirmed. A compressor pause can be normal between cycles; check the heating-mode mapping in the integration settings.
 {% elif reason not in ['unknown', 'unavailable', ''] %}{{ reason }}
+{% endif %}
+
+{% if state_attr('@status@', 'heating_enabled') == true %}
+Heating is enabled · {% if state_attr('@status@', 'compressor_active') == false %}compressor paused between cycles{% elif state_attr('@status@', 'compressor_active') == true %}compressor running{% else %}waiting for compressor activity{% endif %}
 {% endif %}
 
 {% set entries = state_attr('@status@', 'recent_decisions') or [] %}
@@ -259,11 +263,14 @@ The AC status is unavailable. Check the integration before enabling assistance.
 ### {{ status | replace('_', ' ') | capitalize }}
 {{ state_attr('@ac_status@', 'reason') or 'Waiting for an explanation.' }}
 
+{% set actual_mode = state_attr('@ac_status@', 'actual_mode') %}
+{% if actual_mode %}AC unit **{{ actual_mode | replace('_', ' ') | capitalize }}**{% endif %}
+
 {% set target = state_attr('@ac_status@', 'commanded_target') %}
 {% if is_number(target) %}Session target **{{ target | float | round(1) }} °C**{% endif %}
 
 {% set room = state_attr('@ac_status@', 'external_room_temperature') %}
-{% if is_number(room) %}External room thermometer **{{ room | float | round(1) }} °C**{% endif %}
+{% if is_number(room) %}Room thermometer **{{ room | float | round(1) }} °C**{% else %}Waiting for a fresh room-temperature reading.{% endif %}
 
 {% set deadline = as_datetime(state_attr('@ac_status@', 'deadline'), default=none) %}
 {% if deadline %}Session ends by **{{ as_local(deadline).strftime('%d %b, %H:%M') }}**{% endif %}
@@ -316,7 +323,6 @@ Latest 20 evaluations since startup. Sent records a new command in that evaluati
         section("Temperatures over time", "mdi:chart-line", [
             graph("Room comfort · 24 hours", [("indoor", "Room", "#f5a646"), ("target", "Target", "#70c1b3"), ("prediction", "Predicted minimum", "#a89fe8")]),
             graph("Heating water · 24 hours", [("output", "Device target", "#f5a646"), ("inlet", "Return", "#64b5f6"), ("outlet", "Supply", "#e87979"), ("limited", "Allowed target", "#70c1b3")]),
-            markdown("The device target and measured-temperature graphs include Home Assistant's saved history from before this migration. New controller entities begin recording at installation."),
         ]),
         section("Decision history", "mdi:timeline-clock-outline", [decision_table, decision_mobile,
             graph("Controller activity · 24 hours", [("mode", "Mode", "#70c1b3"), ("status", "Status", "#f5a646"), ("operating", "Heat pump", "#64b5f6")]),
@@ -328,7 +334,7 @@ Latest 20 evaluations since startup. Sent records a new command in that evaluati
 {{ item.reason }}
 
 {% if not loop.last %}---{% endif %}
-{% else %}No cycle events recorded by the new controller.{% endfor %}
+{% else %}No cycle events recorded yet.{% endfor %}
 
 The latest 20 cycle events survive restarts. Completion means the configured temperature hold and normal-target restoration were confirmed.""") if e.get("disinfection_status") else None,
         ]),
@@ -337,7 +343,24 @@ The latest 20 cycle events survive restarts. Completion means the configured tem
             markdown("**Model error**\n\n{% if states('@samples@') | int(0) > 0 %}{{ states('@error@') }} °C{% else %}Not learned yet{% endif %}", columns=6),
             temperature("prediction", "Predicted minimum", "mdi:chart-timeline-variant"),
             temperature("proposed", "Proposed water target", "mdi:thermometer-auto"),
-            markdown("A prediction appears after enough suitable heating observations and a usable forecast. Learning starts fresh; values from the legacy model are not imported."),
+            markdown("""**Floor response & recovery**
+
+{% set delay = state_attr('@status@', 'floor_response_hours') %}
+{% if is_number(delay) %}Floor response allowance **{{ delay | float | round(1) }} hours** · configured estimate{% endif %}
+
+{% set rate = state_attr('@status@', 'observed_room_cooling_celsius_per_hour') %}
+{% if is_number(rate) %}Room is {% if rate | float > 0.05 %}cooling at **{{ rate | float | round(2) }} °C/h**{% elif rate | float < -0.05 %}warming at **{{ -(rate | float) | round(2) }} °C/h**{% else %}holding steady{% endif %}
+{% else %}Room trend needs at least 30 minutes of continuous observations.{% endif %}
+
+{% set extra = state_attr('@status@', 'water_recovery_assistance_celsius') %}
+{% if is_number(extra) and extra | float > 0 %}Gradual recovery assistance adds **{{ extra | float | round(1) }} °C** to the water recommendation.{% endif %}
+
+{% set heating = state_attr('@status@', 'learning_heating_hours') %}{% set idle = state_attr('@status@', 'learning_idle_hours') %}
+{% if is_number(heating) and is_number(idle) %}Accepted learning: **{{ heating | float | round(1) }} h heating** · **{{ idle | float | round(1) }} h floor cooling**{% endif %}
+
+{% if state_attr('@status@', 'learning_excluded_by_ac') %}AC operation or settling is currently excluded from learning.{% endif %}
+
+Forecast preparation and room feedback work while the model learns. A predicted minimum appears after enough suitable observations and a usable forecast."""),
             tile("pv", "Solar generation", "mdi:solar-power", color="amber"),
             tile("battery_soc", "Battery charge", "mdi:battery", color="green"),
             tile("grid_import", "Grid import", "mdi:transmission-tower-import", color="blue"),
@@ -377,11 +400,9 @@ The latest 20 cycle events survive restarts. Completion means the configured tem
             markdown("**Power reading needs correction**\n\nThe existing electrical-power helper reports a different scale from the phase meters. Treat its power and any dependent COP calculation as unverified until the helper's units/formula are checked.", accent="245, 166, 70") if notes.get("power_units_unverified") else None,
             markdown("These efficiency readings come from the existing equipment sensors. They are not calculated or validated by Adaptive Heating."),
         ]),
-        section("Manual controls & migration", "mdi:tune", [
+        section("Controls & settings", "mdi:tune", [
             markdown("**Manual water adjustment**\n\nChanging the device water target can pause automatic control. Review the cause before selecting Observe and then Automatic again."),
             tile("output", "Manual heating-water target", "mdi:thermometer-water", 12, "orange", [{"type": "numeric-input", "style": "buttons"}]),
-            tile("legacy_enabled", "Legacy controller enabled", "mdi:history", 12, "grey", tap_action={"action": "none"}, icon_tap_action={"action": "none"}),
-            markdown("Keep both legacy PyScript writers disabled when using the integration. Disinfection uses the integration's Room target; the old room-reference and tank-target helpers are no longer controls.") if e.get("legacy_enabled") else None,
             tile("hacs_update", "Integration update · HACS", "mdi:package-up", 12, "blue"),
             {"type": "button", "name": "Integration settings", "icon": "mdi:cog-outline", "show_state": False,
              "tap_action": {"action": "navigate", "navigation_path": "/config/integrations/integration/adaptive_heating"},
@@ -393,7 +414,7 @@ The latest 20 cycle events survive restarts. Completion means the configured tem
     for title, view_path, icon, subtitle, sections in [
         ("Heating", "0", "mdi:home-thermometer", "Room comfort, live decisions and hot water", overview_sections),
         ("Activity & trends", "adaptive-heating", "mdi:chart-timeline-variant", "What changed, what was proposed, and what the house did", activity_sections),
-        ("Equipment", "equipment", "mdi:heat-pump-outline", "Device readings, manual controls and migration details", equipment_sections),
+        ("Equipment", "equipment", "mdi:heat-pump-outline", "Device readings, manual controls and settings", equipment_sections),
     ]:
         views.append({"title": title, "path": view_path, "type": "sections", "max_columns": 3,
                       "header": {"layout": "responsive", "badges_position": "bottom", "badges_wrap": "wrap",

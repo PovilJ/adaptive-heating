@@ -95,7 +95,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.refresh_inputs(indoor=21.3, outdoor=-30)
         await self.make_controller()
         self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
-        self.controller.room_history = [(self.now - timedelta(minutes=30), 21.9), (self.now - timedelta(minutes=5), 21.4)]
+        self.controller.room_history = [(self.now - timedelta(minutes=30 - 5 * i), 21.9 - .1 * i) for i in range(7)]
         await self.controller.async_request_refresh()
         self.assertEqual(self.controller.planner_data["phase"], "recovery")
         self.assertIn("rapid cooling", self.controller.data["reason"])

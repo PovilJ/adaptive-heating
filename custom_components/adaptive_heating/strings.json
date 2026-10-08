@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Adaptive Heating",
-        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off.",
+        "description": "Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off. If the activity sensor reports OFF during normal compressor pauses, map a separate heating-mode entity and its enabled value. Water targets can then be adjusted while the compressor is idle; hot water and defrost still block control.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -71,7 +71,11 @@
           "ac_min_off_minutes": "Minimum AC rest before another session (minutes)",
           "ac_settle_minutes": "Exclude AC effects from learning after stopping (minutes)",
           "ac_max_session_kwh": "AC session electricity budget when a meter is mapped (kWh)",
-          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)"
+          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)",
+          "heating_mode_entity": "Heating-mode entity (optional, separate from compressor activity)",
+          "heating_mode_state": "Value that enables space heating (for example heat or 4)",
+          "heating_idle_state": "Compressor-idle activity while heating remains enabled (for example OFF)",
+          "thermal_response_hours": "Estimated floor response time (hours; initially 3, not automatically learned)"
         }
       }
     },
@@ -92,14 +96,15 @@
       "invalid_ac_limits": "Check the AC outdoor limit, ceiling, minimum/maximum run, rest time, sensor age and session electricity budget.",
       "ac_active": "Select AC assistance Off and wait for confirmed restoration before changing settings.",
       "ac_incomplete": "Select both an AC climate entity and an external room thermometer, or leave all AC mappings empty.",
-      "ac_heat_required": "The AC must support explicit Heat and Off modes."
+      "ac_heat_required": "The AC must support explicit Heat and Off modes.",
+      "idle_hot_water_conflict": "The compressor-idle state must differ from the hot-water state."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Configure Adaptive Heating",
-        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off.",
+        "description": "Changing settings restarts this controller in Observe mode. Select entities from your existing device integrations. Initial mode is Observe and sends no commands. Temperature limits and targets below are in °C; selected sensors may use °C or °F. Power inputs may use W or kW. Battery and grid charge/discharge inputs must be separate positive power measurements. Map the current controller's enabled switch as the inhibit input during migration. Optional disinfection raises the normal tank target and verifies a continuous measured hold. Historical defaults are 68°C target, 65°C for 5 minutes, every 12–16 days; check them for your installation. Disinfection has its own Observe/Automatic mode and starts in Observe. Restoring an interrupted tank target can still run in Observe or Off. Cold-night planning is optional and initially disabled. It uses a forecast through the morning and an adaptive, conservative cooldown estimate; it does not calculate COP or promise electricity savings. The proposed 20°C minimum and 23°C ceiling must suit your house. AC assistance has its own Observe mode, needs both main and AC Automatic to command, and borrows only an AC that is Off. Verify its outdoor operating limit. A configured AC power meter enables a session energy budget; without one only the runtime limit applies. An interrupted owned AC may be restored to Off even in Observe/Off. If the activity sensor reports OFF during normal compressor pauses, map a separate heating-mode entity and its enabled value. Water targets can then be adjusted while the compressor is idle; hot water and defrost still block control.",
         "data": {
           "indoor_entity": "Indoor temperature sensor",
           "weather_entity": "Weather entity (hourly forecast)",
@@ -166,7 +171,11 @@
           "ac_min_off_minutes": "Minimum AC rest before another session (minutes)",
           "ac_settle_minutes": "Exclude AC effects from learning after stopping (minutes)",
           "ac_max_session_kwh": "AC session electricity budget when a meter is mapped (kWh)",
-          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)"
+          "ac_sample_seconds": "Maximum AC sensor age and meter sampling gap (seconds)",
+          "heating_mode_entity": "Heating-mode entity (optional, separate from compressor activity)",
+          "heating_mode_state": "Value that enables space heating (for example heat or 4)",
+          "heating_idle_state": "Compressor-idle activity while heating remains enabled (for example OFF)",
+          "thermal_response_hours": "Estimated floor response time (hours; initially 3, not automatically learned)"
         }
       }
     },
@@ -187,7 +196,8 @@
       "invalid_ac_limits": "Check the AC outdoor limit, ceiling, minimum/maximum run, rest time, sensor age and session electricity budget.",
       "ac_active": "Select AC assistance Off and wait for confirmed restoration before changing settings.",
       "ac_incomplete": "Select both an AC climate entity and an external room thermometer, or leave all AC mappings empty.",
-      "ac_heat_required": "The AC must support explicit Heat and Off modes."
+      "ac_heat_required": "The AC must support explicit Heat and Off modes.",
+      "idle_hot_water_conflict": "The compressor-idle state must differ from the hot-water state."
     }
   }
 }

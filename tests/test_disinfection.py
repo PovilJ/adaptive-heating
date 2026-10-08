@@ -193,7 +193,7 @@ class TankBoundary(unittest.IsolatedAsyncioTestCase):
             await self.controller.async_disinfection_run()
         await self.controller.async_mode("automatic")
         self.assertEqual(self.controller.data["status"], "paused")
-        self.assertIsNone(self.controller.model.emitter)
+        self.assertEqual(self.controller.model.emitter, 30)
         self.assertEqual(self.controller.model.samples, 0)
         self.assertEqual(len(self.writes()), 1)
 

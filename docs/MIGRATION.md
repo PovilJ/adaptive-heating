@@ -1,9 +1,10 @@
 # From the legacy scripts to Adaptive Heating
 
-This guide compares the supplied PyScript snapshots with local integration **0.3.0**.
+This guide compares the supplied PyScript snapshots with local integration **0.3.1**.
 It describes source behavior and the intended cutover. The first-house
-installation and dashboard migration are now recorded, while Automatic cutover
-and field validation remain pending. See [history and current status](HISTORY.md)
+installation and dashboard migration are recorded. The October 8 live read showed
+Automatic selected but paused during normal compressor idle; field validation
+remains pending. See [history and current status](HISTORY.md)
 and [legacy provenance](../legacy/README.md) for the evidence and original files.
 
 The rewrite replaces the space-heating water-setpoint controller. The installer
@@ -12,8 +13,9 @@ or history, and does not disable existing scripts. Each house gets its own UI
 configuration and new learning. Version 0.2.0 adds the optional [disinfection replacement](DISINFECTION.md); it
 requires tank mappings and an explicit first run before repeat scheduling.
 Version 0.3.0 adds optional [cold-night planning and AC assistance](COLD_NIGHTS.md).
-The last recorded live installation remains 0.1.0 in Observe on September 24;
-building the new source does not update that installation.
+The September 24 installation began with 0.1.0 in Observe. Later live reads are
+recorded separately in the history; building the pending correction does not
+update the running installation.
 
 ## Behavior and feature disposition
 
@@ -22,14 +24,14 @@ building the new source does not update that installation.
 | Installation and house mappings | Copy/edit PyScript source with literal entity IDs and separately created helpers. | **Replaced:** a reusable component release with UI selectors and per-entry settings. No PyScript dependency for either controller. |
 | Operating modes | Enable helper gates the whole cycle; the shadow branch is not a normal continuous mode. | **Expanded:** Observe calculates/learns without writes when inputs and operating gates permit; Automatic permits writes; Off disables writes and fitting. Startup/reconfiguration returns to Observe. |
 | Target and learning storage | `input_number` helpers for the room target, `k_loss` and `k_gain`. | **Replaced:** integration-owned Room target and stored model. Legacy coefficients are not imported; the model structure and bounds differ. |
-| Learning | Night-only window, short in-memory history and heating-on/off inference from water temperatures. | **Reworked:** consecutive eligible ordinary-heating observations, return/supply measurements, fixed three-hour emitter lag and bounded residual-based fitting. A separate cooldown model now learns settled, measured low-water dark intervals. AC operation and settling exclude both models. Neither model measures COP or unheated-house loss. |
-| Prediction | Up to 12 hourly steps, integer water candidates, direct loss/gain response. | **Reworked:** up to 12 forecast hours with 15-minute simulation steps; prediction can adjust the curve by at most 2 °C after sample/error gates pass. Without a usable model, curve and room feedback still work. |
+| Learning | Night-only window, short in-memory history and heating-on/off inference from water temperatures. | **Reworked:** valid heating and idle observations with explicit activity events, return/supply measurements during floor charging, retained floor heat and a configurable response time (initially three hours). AC operation/settling exclude fitting. A separate night-policy model still calibrates comparable settled low-water dark intervals. Neither model measures COP or unheated-house loss. |
+| Prediction | Up to 12 hourly steps, integer water candidates, direct loss/gain response. | **Reworked:** up to 12 forecast hours with 15-minute simulation steps; prediction can adjust the curve by at most 2 °C after sample/error gates pass. In 0.3.1, sustained cold forecasts also prepare the baseline before model calibration, using the floor and water-ramp lead. |
 | Cold/sunset/coasting strategy names | `SOLAR_TRICKLE`, `SOLAR_COAST`, `PRE_SUNSET`, `COLD_PREP`, `COAST`, `NIGHT_HOLD`, `MAINTAIN`, `RECOVERY`, fixed time windows and target buffers. | **Reimplemented optionally in 0.3.0:** up to 24-hour weather, sunset/floor lead and empirical cooldown inform preparation, ceiling hold, coasting and early recovery. Targets are capped by comfort limits; water slew still applies. Exact legacy rules, buffers and names are not preserved. Default disabled. |
-| Passive sunshine | Weather/sun/time heuristics and an added simulated solar gain for the first six forecast hours when sunny. | **Changed:** no assumed solar heat enters a prediction. Consecutive sunny forecasts can influence preferred morning recovery only with adequate coverage and a safe projection; post-morning waiting also requires actual room warming. Weather labels still filter ordinary-heating learning. |
+| Passive sunshine | Weather/sun/time heuristics and an added simulated solar gain for the first six forecast hours when sunny. | **Changed:** no assumed solar heat enters a prediction. Consecutive sunny forecasts can influence preferred morning recovery only with adequate coverage and a safe projection; post-morning waiting also requires actual room warming. Weather labels no longer stop response learning; fitted loss can include unmeasured solar/internal gains. |
 | AC assistance | Not present. | **Added in 0.3.0:** optional climate and external room sensor, independent Observe/Automatic/Off, outdoor-temperature limit, bounded owned sessions, manual-change/recovery handling, and sampled kWh budget only when metered. Both main and AC modes must be Automatic to start. |
 | PV and batteries | No measured PV/grid/battery surplus policy. | **Added:** optional, default-off preheating after sustained measured surplus, with household/battery priority checks. Passive sunshine and electrical surplus are separate. |
-| Trend/momentum/minimum-delta rules | Trend boost, hold reductions while below target, and a cold-weather floor above return temperature. | **Not ported as individual overrides:** curve/feedback, lagged prediction and final command limits determine the output. Equivalent behavior is not guaranteed. |
-| Hot water and defrost | `HEAT` check protects only the minimum-delta adjustment; no complete hot-water write/fitting gate or dedicated defrost input. | **Expanded:** writes require the configured space-heating state; optional defrost/inhibit inputs also gate control. Blocked intervals do not fit the model. |
+| Trend/momentum/minimum-delta rules | Falling-temperature trend raises the candidate ceiling; an intended hold below target and a cold-weather floor above return temperature are subsequently subject to inconsistent limiting. | **Reworked in 0.3.1:** continuous half-hour room trends support earlier recovery; gradual stalled-recovery assistance and a cold/falling-room hold pass through the same final command limits. The return-water minimum-delta rule is not copied. See the dated review below for reproduced legacy differences. |
+| Hot water and defrost | `HEAT` check protects only the minimum-delta adjustment; no complete hot-water write/fitting gate or dedicated defrost input. | **Expanded:** writes require confirmed space heating; an optional mode mapping permits normal idle cycles. Hot water, defrost and inhibits block floor commands while valid room/floor cooling observations continue. |
 | Missing forecasts | Fixed 30 °C recommendation and target-based predicted minimum. | **Replaced:** curve/room-feedback fallback and an unavailable prediction rather than an invented forecast result. |
 | Command cadence and limits | 30-minute trigger and manual button; per-cycle limits compare the original recommendation before some adjustments. | **Reworked:** five-minute evaluation, configurable command interval (default 30 minutes), elapsed-time rise/fall limits on the final output, hardware min/max/step, and holds for manual edits or unconfirmed commands. |
 | Diagnostics | Fixed `sensor.heating_*`/forecast/prediction entities; recommendations logged before final adjustments; 20 recent entries. | **Replaced:** entry-owned entities expose proposed, limited, commanded and actual values, model diagnostics and 20 recent decisions. Additional plan/AC sensors report timing, effective target, cooldown/coverage and session ownership/metering. Old IDs and log schemas are not retained. |
@@ -41,6 +43,94 @@ Implementation references: [engine.py](../custom_components/adaptive_heating/eng
 [configuration](../custom_components/adaptive_heating/config_flow.py), and
 [design rationale](DESIGN.md). These changes are implemented improvements in
 structure and controls; comfort and efficiency improvements need field evidence.
+
+## Review against the working controller — October 8, 2026
+
+The owner reports that the legacy controller worked well last winter. That is
+the comfort baseline to preserve; passing isolated tests does not establish that
+the rewrite performs better in the house. This review used the unchanged archive,
+the local integration, read-only HA helper values, and an offline harness with
+fake state/services. It did not change the running controller or equipment.
+
+The following comparison was made before implementing the additional 0.3.1
+forecast/recovery policy. The measured legacy cases remain valid; references to
+the new untrained baseline here describe the pre-improvement implementation.
+
+The most consequential differences are:
+
+- **Idle compressor:** the legacy main cycle runs learning, optimization and
+  actuation when its enable helper is On even if unit activity is `OFF`. The
+  rewrite's activity gate stopped all recommendations in that situation. The
+  pending mode-mapping fix distinguishes heating enabled (this house's mode
+  value `4`) from compressor activity, and permits normal idle control.
+- **Early forecast response:** legacy optimization uses forecast temperatures
+  immediately, including its learned helper coefficients. The new basic curve
+  only uses forecast simulation after its model acceptance gate; separate
+  cold-night planning can still prepare before a qualifying cold event.
+  With a 22 °C room/target, 5 °C outside, an afternoon clock, no sunshine and
+  constant hourly forecasts, the offline legacy recommendation was 30 °C for
+  a 5 °C forecast and 40 °C for a −20 °C forecast. The new *untrained basic
+  controller* recommended 32.65 °C in both cases. These are proposals, before
+  final command limits, and this comparison does not run the optional planner
+  or demonstrate comfort/energy performance.
+- **House-specific calibration:** the existing helpers currently read
+  `k_loss=0.01567` and `k_gain=0.03318`; their original calibration date is
+  unknown. Preserve these for comparison, rather than treating the new defaults
+  as an established house baseline. They cannot be copied directly into the
+  revised floor-state model, whose coefficients have different meaning.
+- **Slow floor response:** legacy learning compares room readings roughly
+  2–3 hours apart, with nighttime-only fitting. Strategy timing allows about
+  three hours before sunset, but its optimizer applies water heat directly
+  every hour; it does not track a concrete-floor state. The pending model retains
+  estimated floor heat through compressor pauses and learns heating/idle
+  intervals outside AC operation/settling. Its response duration is still a
+  configured estimate, initially three hours, rather than automatically learned.
+- **Trend and reduction protection:** legacy trends can widen the candidate
+  ceiling by 2 °C when the room falls faster than 0.2 °C/hour below target.
+  This is not an unconditional 2 °C command boost, and its history stops updating
+  during daytime. The intended below-target hold also fails in some paths:
+  at room 21.4 °C, target 22 °C, current water target 30 °C and proposal 26 °C,
+  the archived actuation function ultimately commands 29 °C. Its later limiter
+  overwrites the earlier hold. Conversely, with current/proposed water 30 °C,
+  return 35 °C, outdoor −5 °C and activity `HEAT`, its return-water adjustment
+  commands 36 °C, bypassing the nominal 2 °C rise limit. Preserve the purpose
+  of these controls only through consistent final limits.
+
+Priority work after the idle gate is to validate ordinary daytime/overnight
+anticipation, sustained falling-temperature recovery, and commissioned baseline
+water recommendations against the old controller. Compare predicted and measured
+temperatures over the actual floor response window; a small five-minute residual
+alone is insufficient evidence of a good multi-hour prediction. Improvements in
+comfort and electrical consumption still require measured operating history.
+
+### External comparison supplied by the owner
+
+[ESPHome Ecodan](https://github.com/gekkekoe/esphome-ecodan-hp) is relevant as a
+control-design reference, although its CN105 interface and Mitsubishi-specific
+controls do not install on this Versati. Its
+[adaptive-control documentation](https://github.com/gekkekoe/esphome-ecodan-hp/blob/main/docs/auto-adaptive.md)
+describes return-water-based demand, floor-specific response profiles and staged
+assistance when room temperature remains below target. The inspected
+[zone calculation](https://github.com/gekkekoe/esphome-ecodan-hp/blob/a64d1b05cd3b53b708df675e010bfa0404f2c410/components/optimizer/auto_adaptive.cpp)
+distinguishes enabled heating from an active compressor. Its
+[boost implementation](https://github.com/gekkekoe/esphome-ecodan-hp/blob/a64d1b05cd3b53b708df675e010bfa0404f2c410/components/optimizer/smart_boost.cpp)
+waits 60 minutes for UFH, increases in stages, and gradually decays when the room
+error improves; the documentation's immediate-reset description is less precise.
+These are feedback/heuristic controls, not identification of a slab response model.
+
+Its linked [ODIN optimizer guide](https://github.com/gekkekoe/heatpump-optimizer#17-how-the-optimizer-works)
+describes a separate predictive layer, including cooldown and passive-solar
+learning and comparisons of expected versus actual room temperature. Those are
+useful design ideas. The guide's supported installation requires its Asgard/ODIN
+hardware, and this review did not inspect or validate the solver implementation.
+No external controller code was copied and no new control rule was deployed.
+
+The subsequent local 0.3.1 implementation addresses the forecast/trend gaps with
+bounded policies described in [the design](DESIGN.md). Its stalled-recovery
+timing uses the configured floor response rather than copying Ecodan's one-hour
+wait or its return-water delta values. It retains AC exclusions and a single
+final output limiter. Automatic floor-lag identification and field comparison
+remain open.
 
 ## Mapping the original house
 

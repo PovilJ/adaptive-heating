@@ -1,6 +1,9 @@
 # Heating dashboard
 
-The first-house dashboard was rebuilt on **2026-09-24** for integration 0.1.0, then extended for the 0.2.0 disinfection rewrite.
+The first-house dashboard was rebuilt on **2026-09-24**, then refreshed live on
+**2026-09-25** for integration 0.3.0 with cold-night planning and AC assistance.
+The decision and floor/recovery cards were updated live on **2026-10-08** with
+integration 0.3.1; the other live layout and controls were preserved.
 It uses native Home Assistant cards. The already-installed card-mod resource
 adds rounded corners and subtle accent backgrounds; control and data cards do
 not depend on that styling resource. No additional frontend resource was installed.
@@ -16,12 +19,41 @@ not depend on that styling resource. No additional frontend resource was install
   grid and battery readings. Narrow screens use a readable decision list in
   place of the wider table.
 - **Equipment** (`/dashboard-heating/equipment`): hardware readings, existing
-  efficiency sensors, manual water adjustment and migration references, and the installed HACS update entity.
+  efficiency sensors, manual water adjustment, settings, and the installed HACS update entity.
 
 The overview's Room target and Control mode belong to the new integration.
 Evaluate now uses the new integration button. It evaluates without writing in
 Observe; in Automatic it can send a command only when the existing guards and
 command interval permit it.
+
+The October 8 correction distinguishes heating mode from compressor
+activity. An OFF activity reading can be a normal compressor pause while heating
+mode remains enabled. A separate integration mode mapping permits calculations
+and bounded commands during that pause; it is not a heat-pump power control.
+Valid heating/cooling observations retain the estimated floor heat over hours.
+The status entity exposes floor-response duration, estimated floor heat state and
+accepted heating/cooling hours. The previous waiting message now directs users
+to check mode mapping instead of asserting that the entire heat pump is off.
+The correction is installed and verified live: heating register `4.0` with
+compressor activity OFF now permits Automatic evaluation instead of pausing.
+
+The 0.3.1 dashboard also identifies confirmed heating enablement separately from
+compressor activity. **Floor response & recovery** in Activity & trends reports
+the configured response allowance, measured half-hour room trend, gradual
+recovery assistance, accepted heating/cooling hours and an active AC learning
+exclusion. Missing attributes produce waiting text. Forecast preparation and
+room feedback operate before a model prediction becomes available. These
+template branches pass isolated real-HA rendering checks. The two updated live
+cards were saved, re-read and rendered through HA after restart. At the first
+evaluation the recommendation was 31.68 °C and the allowed/current water target
+was 25 °C because startup rate limits had not yet allowed a device step. This
+verifies the recommendation and UI, not a completed hardware command or room
+recovery. The three-hour floor response remains a configured estimate.
+
+The October 8 backup is in the ignored `.local/deployment-0.3.1/` directory:
+`dashboard-before.json` restores the previous UI through `lovelace/config/save`;
+`dashboard-proposed.json` is the verified replacement. Source and options
+backups are separate and must be restored together for a controller rollback.
 
 ## What the history means
 
@@ -54,7 +86,7 @@ python3 scripts/build_dashboard.py \
 ```
 
 Required keys are listed in the generator. Optional mappings add equipment,
-solar/battery, daily electricity, hot-water, and migration cards. Use the actual
+solar/battery, daily electricity, hot-water, and AC cards. Use the actual
 entity IDs assigned by HA, including any suffixes. The example is a starting
 point, not a set of assumed IDs for another house.
 
@@ -79,16 +111,15 @@ at desktop and phone widths. No heating service was called during verification.
 
 Still pending:
 
-- Check recommendations during representative heating, hot-water and defrost
-  operation before an intentional Automatic cutover.
+- Check recommendations and device acknowledgment during representative
+  heating, hot-water and defrost operation. Automatic was already selected
+  before the October 8 installation and was explicitly restored afterward.
 - Correct or verify the existing electrical-power helper's units/formula. Its
   value is inconsistent with the phase meters. The Equipment view flags this;
   neither that helper nor dependent efficiency calculations were changed.
-- Install 0.2.0 and configure its tank entities, then verify a real cycle. The
-  owner's PyScript was removed; old helper state is historical, not evidence of
-  a running scheduler. The corrected dashboard uses the actual tank number,
-  removes disconnected legacy controls, and shows Update required while the new
-  disinfection status entity is absent. No live tank cycle was run by this change.
+- Tank entities are configured in the live 0.3.1 installation, with scheduling
+  Off. Verify an explicitly requested first real cycle before enabling it.
+  No tank cycle was run by these dashboard updates.
 
 ## Disinfection panel (0.2.0)
 
@@ -140,3 +171,24 @@ full afternoon, night, and morning when assessing preparation. See
 The new cards use native Markdown, tiles, and history graphs. Existing optional
 card-mod decoration is cosmetic. Generating this panel writes a local JSON file;
 it does not change the installed dashboard, select Automatic, or operate the AC.
+
+### First-house live refresh, September 25
+
+Applied the cold-night and AC panels to the existing three views. Removed the
+retired-controller card, migration notes, old-model explanations and obsolete
+upgrade text. Corrected disinfection mappings to the actual `boiler_room_`
+entity IDs assigned by Home Assistant. AC metering cards are omitted because
+this installation has no AC power meter configured; the status explains the
+runtime-only limit.
+
+The supplied dashboard matched the live configuration before editing. All 47
+referenced entities were verified, all 27 Markdown templates rendered through
+Home Assistant, and the saved dashboard matched its read-back. All five dashboard
+tests passed. The three views were inspected in Chrome. Control modes and
+equipment settings were not changed.
+
+The previous dashboard, actual entity mapping, proposed/saved dashboard and
+rendered templates are kept in the Git-ignored directory
+`.local/ha-dashboard-backups/2026-09-25T074020Z-cold-night/`.
+To undo only this dashboard change, send its `dashboard-before.json` through
+`lovelace/config/save` for `dashboard-heating`.

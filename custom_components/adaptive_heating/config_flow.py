@@ -86,6 +86,13 @@ def validate(hass, values, current_entry_id=None):
                 errors["ac_entity"] = "already_controlled"
     if not values.get("heating_state", "").strip():
         errors["heating_state"] = "state_required"
+    if values.get("heating_mode_entity"):
+        for key in ("heating_mode_state", "heating_idle_state"):
+            if not str(merged[key]).strip():
+                errors[key] = "state_required"
+        # An idle exception must never authorize a known hot-water interval.
+        if str(merged["heating_idle_state"]).strip().casefold() == str(merged["disinfection_hot_water_state"]).strip().casefold():
+            errors["heating_idle_state"] = "idle_hot_water_conflict"
     battery = [values.get(key) for key in ("battery_soc_entity", "battery_charge_entity", "battery_discharge_entity")]
     if any(battery) and not all(battery):
         errors["base"] = "battery_incomplete"

@@ -58,13 +58,50 @@ the heating control path.
 
 The starting model has room temperature and a lagged emitter/building heat state.
 It fits two bounded temperature-response coefficients from suitable consecutive
-measurements. The three-hour lag is currently a fixed assumption. Coefficients
+measurements across known heating and cooling activity. The initial three-hour
+floor response is now configurable; automatic identification remains future work. Coefficients
 and predicted temperature errors are empirical; none represents measured COP.
 
 Forecast correction remains within 2 °C of the curve. The model has no influence
 until 24 accepted samples exist and its recent one-step residual is small. This
 is a conservative gate, not a statistical confidence guarantee or proof of
 twelve-hour forecast accuracy. There is no automatic sunny-weather heat injection.
+Weather labels no longer exclude response observations; consequently empirical
+loss/gain can include unmeasured window and internal gains.
+
+In 0.3.1, the baseline itself anticipates sustained forecast cooling within the
+configured floor delay, water ramp and one command opportunity. Two adjacent
+cold hours are required; future warming cannot lower the baseline early. This
+policy works before model calibration. A continuous 30–60 minute room trend
+can add up to 2 °C of water compensation for expected cooling during the floor
+response. Sustained stalled recovery adds a separate 0.5 °C per command interval
+after the floor-response allowance, capped at 2 °C and decaying as the room warms.
+The model cannot cancel these recovery additions through a negative correction
+while measured cooling or stalled recovery warrants them. A below-target falling
+room holds ordinary floor reductions. Intentional night coasting and comfort
+ceiling reductions retain precedence, and all final actuator limits still apply.
+AC operation/settling exclude room-trend recovery as well as model fitting.
+These are bounded recovery policies, not measured slab energy or guaranteed
+future temperatures.
+
+Heating enablement and compressor activity are distinct. An optional mode entity
+confirms heating remains enabled while the activity sensor reports idle. Activity
+and defrost events capture short floor-heating cycles between five-minute polls.
+The floor state follows measured circuit water while charging and relaxes toward
+room temperature over hours when idle or heating the tank. It is never instantly
+set to room temperature just because the compressor stops. Both heating and idle
+intervals fit the empirical response, with accepted hours exposed separately.
+AC operation and settling exclude both fitting paths. Unknown phases and invalid
+temperature data cannot establish a fit; normal tank/defrost pauses still permit
+observing the floor's residual heat while preventing space-heating writes.
+
+Forecast candidates start from current measured water and include the configured
+water rise/fall rates and command cadence before the floor delay. Device-specific
+steps, compressor modulation and weather/internal gains remain uncertainties;
+these are conditional temperature projections, not a certified slab model.
+Recovery planning reserves at least the configured floor-response duration plus
+the existing water ramp budget. Previous response fits are invalidated by the
+model revision, while the room target is retained.
 
 The original water model explores constant water-temperature candidates, not an optimal
 multi-period electricity schedule. The latter needs measured electrical-response
@@ -143,6 +180,8 @@ Priority follow-ups are automatic lag identification, fuller multi-room planning
 learned window-gain timing, rolling forecast error evaluation, measured electricity comparisons, optional
 tariff/export economics, and support for signed power sensors directly in setup.
 Domestic-hot-water disinfection is implemented as an optional coordinated controller
-in 0.2.0; cold-night/AC coordination is implemented locally in 0.3.0. See
+in 0.2.0; cold-night/AC coordination was added in 0.3.0 and is installed with the
+0.3.1 controller in the first house. Representative operation remains to be
+validated. See
 [the tank policy and recovery design](DISINFECTION.md). Changes
 to that controller require their own specification and validation.

@@ -65,8 +65,8 @@ class PlannerSettings:
             raise ValueError("Invalid planning comfort limits")
         if self.preheat_ceiling - self.night_minimum < 0.5:
             raise ValueError("Planning comfort limits need at least 0.5 Celsius separation")
-        if not 0.5 <= self.floor_lead_hours <= 8:
-            raise ValueError("Floor lead must be between 0.5 and 8 hours")
+        if not 0.5 <= self.floor_lead_hours <= 12:
+            raise ValueError("Floor lead must be between 0.5 and 12 hours")
         hours = (self.morning_hour, self.prepare_hour, self.quiet_start_hour)
         if any(int(h) != h for h in hours) or not 0 <= hours[0] < hours[1] < hours[2] <= 23:
             raise ValueError("Require morning < preparation < quiet-start hours")

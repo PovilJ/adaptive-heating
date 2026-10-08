@@ -39,6 +39,25 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(form["step_id"], "user")
         self.assertIsNotNone(form["data_schema"])
 
+    async def test_separate_numeric_heating_mode_selector_and_validation(self):
+        from homeassistant.config_entries import ConfigEntries
+        self.hass.config_entries = ConfigEntries(self.hass, {})
+        flow = module("config_flow")
+        config = {"indoor_entity": "sensor.room", "weather_entity": "weather.house",
+                  "output_entity": "number.water", "operating_entity": "sensor.activity",
+                  "heating_mode_entity": "number.mode", "heating_mode_state": "4", "heating_state": "HEAT"}
+        for entity in config.values():
+            if isinstance(entity, str) and "." in entity:
+                self.hass.states.async_set(entity, "4.0" if entity == "number.mode" else "OFF")
+        self.hass.states.async_set("number.water", 30, {"unit_of_measurement": "°C"})
+        schema = flow.settings_schema(config)
+        self.assertEqual(schema(config)["heating_mode_entity"], "number.mode")
+        self.assertEqual(flow.validate(self.hass, config), {})
+        for key in ("heating_mode_state", "heating_idle_state"):
+            self.assertEqual(flow.validate(self.hass, config | {key: " "})[key], "state_required")
+        self.assertEqual(flow.validate(self.hass, config | {"heating_idle_state": "HOT WATER"})["heating_idle_state"],
+                         "idle_hot_water_conflict")
+
     async def test_full_entry_setup_options_and_unload_restore_tank(self):
         from homeassistant import bootstrap, loader
         from homeassistant.config_entries import ConfigEntries, ConfigEntry, ConfigEntryState
@@ -69,6 +88,12 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         await self.hass.async_block_till_done()
         coordinator = entry.runtime_data
         self.assertEqual(coordinator.disinfection.mode, "observe")
+        self.hass.states.async_set("sensor.operating", "OFF")
+        await self.hass.async_block_till_done()
+        self.assertIs(coordinator.operating_events[-1][1], False)
+        self.hass.states.async_set("sensor.operating", "HEAT")
+        await self.hass.async_block_till_done()
+        self.assertIs(coordinator.operating_events[-1][1], True)
         self.assertIsNotNone(self.hass.states.get("sensor.test_heating_disinfection_status"))
         form = await self.hass.config_entries.options.async_init(entry.entry_id)
         self.assertEqual(form["type"], "form")

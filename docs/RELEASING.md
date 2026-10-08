@@ -11,7 +11,8 @@ when needed.
 Changing config-entry or stored-data schemas requires a tested migration; never
 replace users' selections with new defaults.
 
-Current source is **local experimental 0.3.0**. Updating version metadata or
+Current source is **experimental 0.3.1**, installed and restarted in the first
+house on October 8; this is not a numbered GitHub release. Updating metadata or
 building an archive does not publish it or change a live HA installation.
 Publication and deployment are separate actions after review and commissioning.
 
@@ -23,14 +24,15 @@ Publication and deployment are separate actions after review and commissioning.
 3. Commit reviewed source and tag the exact commit, for example `v0.3.0`.
 4. Create a GitHub release for that tag with useful release notes.
 5. Attach both assets from `dist/`:
-   - `adaptive_heating-0.3.0.zip`
-   - `adaptive_heating-0.3.0.zip.sha256`
+   - `adaptive_heating-0.3.1.zip`
+   - `adaptive_heating-0.3.1.zip.sha256`
 
 The recorded first 0.1.0 baseline passed all 59 tests, including platform-import
 and setup-form checks against Home Assistant 2026.7.4; see the
 [validation record](HISTORY.md#validation-evidence) for the latest local run.
 Later isolated lifecycle checks cover real HA setup/options/reload/unload with
-simulated equipment, including tank and AC recovery. Live 0.3.0 deployment,
+simulated equipment, including tank and AC recovery. Live 0.3.1 installation,
+options, restart and enabled-but-idle evaluation are verified on HA 2026.9.3;
 heating/AC performance and actual energy comparisons remain pending. Keep this
 experimental status explicit. The updater ignores draft and prerelease releases, so use those for public
 testing rather than advertising an untested build as a stable update.

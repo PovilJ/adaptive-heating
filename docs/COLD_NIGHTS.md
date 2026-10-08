@@ -160,6 +160,7 @@ commissioning. For another house, choose its own entities.
 | Preheat ceiling | 23 °C | Highest planned room target. |
 | Night minimum | 20 °C | Overnight comfort boundary, with an additional prediction margin. |
 | Floor lead time | 3 hours | Allow time for the floor to respond. |
+| Floor response time | 3 hours | Configurable thermal-memory estimate; recovery reserves at least this duration. Automatic identification is not implemented. |
 | Preparation hour | 15:00 | Local fallback start; sunset or a forecast drop can move it earlier. |
 | Quiet-start hour | 20:00 | Local start of the overnight planning period. |
 | Morning hour | 09:00 | Local morning planning boundary. |

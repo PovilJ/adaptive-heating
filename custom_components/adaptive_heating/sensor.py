@@ -71,5 +71,17 @@ class HeatingSensor(HeatingEntity, SensorEntity):
         if self.key == "status":
             return {"recent_decisions": self.coordinator.events, "mode": self.coordinator.mode,
                     "sustained_solar_surplus": (self.coordinator.data or {}).get("surplus"),
+                    "heating_enabled": (self.coordinator.data or {}).get("heating_enabled"),
+                    "compressor_active": (self.coordinator.data or {}).get("compressor_active"),
+                    "floor_heating_active": (self.coordinator.data or {}).get("floor_heating_active"),
+                    "learning_excluded_by_ac": (self.coordinator.data or {}).get("learning_excluded_by_ac"),
+                    "floor_response_hours": self.coordinator.model.lag_hours,
+                    "estimated_floor_heat_state_celsius": self.coordinator.model.emitter,
+                    "learning_heating_hours": self.coordinator.model.heating_hours,
+                    "learning_idle_hours": self.coordinator.model.idle_hours,
+                    "observed_room_cooling_celsius_per_hour": (self.coordinator.data or {}).get("observed_cooling_rate"),
+                    "forecast_planning_outdoor_celsius": (self.coordinator.data or {}).get("planning_outdoor"),
+                    "water_cooling_compensation_celsius": (self.coordinator.data or {}).get("cooling_compensation"),
+                    "water_recovery_assistance_celsius": (self.coordinator.data or {}).get("recovery_boost"),
                     "restart_required": self.coordinator.releases.restart_pending}
         return None

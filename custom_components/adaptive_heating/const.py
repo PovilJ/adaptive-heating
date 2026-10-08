@@ -1,7 +1,7 @@
 """Shared settings. No installation-specific entity IDs belong here."""
 
 DOMAIN = "adaptive_heating"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 MIN_HA_VERSION = "2026.7.0"
 REPOSITORY = "PovilJ/adaptive-heating"
 MODES = ["off", "observe", "automatic"]
@@ -15,11 +15,14 @@ DEFAULTS = {
     "curve_slope": 0.45,
     "curve_offset": 3.0,
     "room_feedback": 2.0,
+    "thermal_response_hours": 3.0,
     "rise_per_hour": 4.0,
     "fall_per_hour": 2.0,
     "control_minutes": 30,
     "stale_minutes": 120,
     "heating_state": "HEAT",
+    "heating_mode_state": "heat",
+    "heating_idle_state": "OFF",
     "solar_preheat": False,
     "surplus_watts": 1000.0,
     "battery_ready_soc": 95.0,
@@ -33,6 +36,7 @@ REQUIRED_ENTITIES = {
     "operating_entity": ["sensor", "binary_sensor", "select"],
 }
 OPTIONAL_ENTITIES = {
+    "heating_mode_entity": ["number", "select", "sensor", "binary_sensor", "switch", "input_boolean"],
     "outdoor_entity": ["sensor"],
     "inlet_entity": ["sensor"],
     "outlet_entity": ["sensor"],

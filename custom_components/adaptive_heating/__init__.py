@@ -21,6 +21,14 @@ async def async_setup_entry(hass, entry):
     await coordinator.async_load()
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    @callback
+    def operating_changed(event):
+        state = event.data.get("new_state")
+        coordinator.note_operating_event(event.data["entity_id"], state.state if state else None, dt_util.utcnow())
+
+    watched = [coordinator.config.get(k) for k in ("operating_entity", "defrost_entity")]
+    entry.async_on_unload(async_track_state_change_event(hass, [e for e in watched if e], operating_changed))
     if coordinator.ac.configured or coordinator.ac.session or coordinator.ac.recovery_pending:
         entry.async_on_unload(async_track_time_interval(hass, coordinator.async_ac_tick, timedelta(seconds=30)))
 

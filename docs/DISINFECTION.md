@@ -46,10 +46,12 @@ and confirmed setpoint restoration, not a certification of water hygiene.
 ## Coordination with heating, solar and batteries
 
 Both controllers share a command lock. From the start journal through confirmed
-restoration, space-heating writes and model updates are paused, even if the heat
-pump still reports HEAT. The model's previous observation and emitter estimate
-are cleared across the interruption so tank temperatures do not train the room
-model. Heating retains its five-minute cadence; tank monitoring runs separately.
+restoration, space-heating writes are paused, even if the heat pump still reports
+HEAT. Valid room/floor cooling observations continue: hot-water activity stops
+charging the estimated floor state, which retains residual heat over hours.
+Tank circuit temperatures are not interpreted as floor charging at a transition
+into hot-water operation. Heating retains its five-minute cadence; tank monitoring
+runs separately. AC operation and settling still exclude response fitting.
 
 Before the scheduling deadline, the room must be within its configured comfort
 band using the integration's **Room target**, not the retired helper. With a

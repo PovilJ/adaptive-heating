@@ -19,10 +19,18 @@ from .const import DEFAULTS, DOMAIN, MODES
 from .disinfection import DEFAULTS as DHW_DEFAULTS
 from .disinfection_controller import DisinfectionController
 from .ac_controller import ACController, DEFAULTS as AC_DEFAULTS
-from .engine import Energy, Model, Settings, decide, finite, limited_output, power_watts, surplus_available, temperature
+from .engine import Energy, Model, Recovery, Settings, cooling_trend, decide, finite, limited_output, power_watts, surplus_available, temperature
 from .planner import DEFAULTS as PLAN_DEFAULTS, CooldownModel, ForecastPoint, PlannerSettings, decide_plan
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def state_matches(state, expected):
+    """Match numeric mode registers (4 / 4.0) as well as text states."""
+    actual_number, expected_number = finite(state), finite(expected)
+    if actual_number is not None and expected_number is not None:
+        return actual_number == expected_number
+    return str(state).strip().casefold() == str(expected).strip().casefold()
 
 
 class HeatingCoordinator(DataUpdateCoordinator):
@@ -38,13 +46,15 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.planner_data = {}
         self.forecast_details = []
         self.room_history = []
+        self.recovery = Recovery()
         self.coast_water_history = []
         self.coast_since = None
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
-        self.model = Model()
+        self.model = Model(lag_hours=self.settings.thermal_response_hours)
         self.mode = "observe"
         self.lock = asyncio.Lock()
         self.previous = None
+        self.operating_events = []
         self.last_commanded = None
         self.last_command_time = None
         self.last_seen_output = None
@@ -65,13 +75,19 @@ class HeatingCoordinator(DataUpdateCoordinator):
         keys = ("indoor_entity", "outdoor_entity", "weather_entity", "output_entity", "inlet_entity", "outlet_entity", "operating_entity", "heating_state")
         # Preserve the old fingerprint for entries without additional mappings.
         keys += tuple(k for k in ("ac_entity", "ac_room_entity", "protection_entity") if self.config.get(k))
+        if self.config.get("heating_mode_entity"):
+            keys += ("heating_mode_entity", "heating_mode_state", "heating_idle_state")
+        if self.settings.thermal_response_hours != DEFAULTS["thermal_response_hours"]:
+            keys += ("thermal_response_hours",)
         raw = json.dumps({k: self.config.get(k) for k in keys}, sort_keys=True).encode()
         return hashlib.sha256(raw).hexdigest()
 
     async def async_load(self):
         data = await self.store.async_load() or {}
         if data.get("identity") == self.identity():
-            self.model = Model.restore(data.get("model"))
+            if data.get("model_revision") == 2:
+                self.model = Model.restore(data.get("model"))
+                self.model.lag_hours = self.settings.thermal_response_hours
             if data.get("cooldown_regime") == self.cooldown_regime():
                 self.cooldown = CooldownModel.restore(data.get("cooldown"))
             target = finite(data.get("target"))
@@ -84,7 +100,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         await self.ac.async_load()
 
     async def async_save(self):
-        await self.store.async_save({"identity": self.identity(), "model": asdict(self.model), "target": self.settings.target,
+        await self.store.async_save({"identity": self.identity(), "model_revision": 2,
+                                    "model": asdict(self.model), "target": self.settings.target,
                                     "configured_target": self.config["target"], "cooldown": self.cooldown.to_dict(),
                                     "cooldown_regime": self.cooldown_regime()})
 
@@ -100,7 +117,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
             return None
         # Helpers and actuator/status entities can correctly remain unchanged for
         # months. Their integration's availability governs them, not value age.
-        if key in ("output_entity", "operating_entity", "defrost_entity", "inhibit_entity", "sun_entity", "ac_entity"):
+        if key in ("output_entity", "operating_entity", "heating_mode_entity", "defrost_entity", "inhibit_entity", "sun_entity", "ac_entity"):
             return state
         stamp = getattr(state, "last_reported", None) or state.last_updated
         age = (now - stamp).total_seconds()
@@ -137,6 +154,23 @@ class HeatingCoordinator(DataUpdateCoordinator):
         water = (inlet + outlet) / 2 if inlet is not None and outlet is not None else None
         output = self.reading("output_entity", now)
         operating = self.fresh_state("operating_entity", now)
+        active_heating = operating is not None and state_matches(operating.state, self.config["heating_state"])
+        idle = operating is not None and state_matches(operating.state, self.config["heating_idle_state"])
+        hot_water = operating is not None and state_matches(operating.state, self.config["disinfection_hot_water_state"])
+        mode_mapped = bool(self.config.get("heating_mode_entity"))
+        heating_mode = self.fresh_state("heating_mode_entity", now) if mode_mapped else None
+        mode_enabled = heating_mode is not None and state_matches(heating_mode.state, self.config["heating_mode_state"])
+        idle_heating = (mode_mapped and mode_enabled and operating is not None
+                        and state_matches(operating.state, self.config["heating_idle_state"])
+                        and not state_matches(operating.state, self.config["disinfection_hot_water_state"]))
+        compressor_active = True if active_heating or hot_water else False if idle else None
+        floor_active = True if active_heating else False if idle or hot_water else None
+        defrost = self.fresh_state("defrost_entity", now) if self.config.get("defrost_entity") else None
+        if defrost is not None and defrost.state == "on":
+            floor_active = False
+        elif self.config.get("defrost_entity") and defrost is None:
+            floor_active = None
+        duty, uninterrupted = self.compressor_interval(now, floor_active)
         reason = ""
         if indoor is None or not 0 <= indoor <= 45:
             reason = "Indoor temperature unavailable, stale, or invalid"
@@ -144,7 +178,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
             reason = "Outdoor temperature unavailable, stale, or invalid"
         elif output is None:
             reason = "Water setpoint unavailable, stale, or invalid"
-        elif operating is None or operating.state.casefold() != self.config["heating_state"].strip().casefold():
+        elif mode_mapped and not mode_enabled:
+            reason = "Space-heating mode disabled or unavailable"
+        elif not active_heating and not idle_heating:
             reason = "Space-heating state not confirmed (including hot water, off, or unknown)"
         for key, label in (("defrost_entity", "Defrost"), ("inhibit_entity", "Another controller or inhibit")):
             if self.config.get(key):
@@ -152,14 +188,68 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 if flag is None or flag.state != "off":
                     reason = f"{label} active or unavailable"
         if self.disinfection.blocks_heating:
-            reason = "Tank disinfection or target restoration in progress; space heating and learning paused"
+            reason = "Tank disinfection or target restoration in progress; space-heating writes paused"
         if inlet is not None and not 0 <= inlet <= 85:
             water = None
         if outlet is not None and not 0 <= outlet <= 85:
             water = None
-        sunny = bool(weather and weather.state in ("sunny", "partlycloudy"))
+        valid_temperatures = (indoor is not None and 0 <= indoor <= 45
+                              and outdoor is not None and -70 <= outdoor <= 60)
         return {"time": now.timestamp(), "indoor": indoor, "outdoor": outdoor, "water": water,
-                "output": output, "blocked": reason, "eligible": not reason and not sunny and water is not None}
+                "output": output, "blocked": reason,
+                "heating_enabled": (mode_enabled if heating_mode is not None else None) if mode_mapped
+                                    else True if active_heating else None,
+                "compressor_active": compressor_active, "floor_heating_active": floor_active,
+                "compressor_on_fraction": duty,
+                "thermal_valid": valid_temperatures and floor_active is not None and (not floor_active or water is not None),
+                "eligible": valid_temperatures and floor_active is not None and uninterrupted and (not floor_active or water is not None)}
+
+    def note_operating_event(self, entity_id, state, now):
+        """Capture short cycles and interruptions between five-minute samples."""
+        def phase_for(value):
+            if value is not None and state_matches(value, self.config["heating_state"]):
+                return True
+            if value is not None and any(state_matches(value, self.config[key]) for key in
+                                         ("heating_idle_state", "disinfection_hot_water_state")):
+                return False
+            return None
+        phase = phase_for(state)
+        if entity_id == self.config.get("defrost_entity"):
+            if state == "on":
+                phase = False
+            elif state == "off":
+                operating = self.fresh_state("operating_entity", now)
+                phase = phase_for(operating.state if operating else None)
+            else:
+                phase = None
+        elif self.config.get("defrost_entity"):
+            defrost = self.fresh_state("defrost_entity", now)
+            if defrost is None:
+                phase = None
+            elif defrost.state == "on":
+                phase = False
+        self.operating_events.append((now.timestamp(), phase))
+        self.operating_events = [(t, p) for t, p in self.operating_events if t >= now.timestamp() - 3600]
+        if phase is None and self.previous is not None:
+            self.previous["eligible"] = False
+
+    def compressor_interval(self, now, active):
+        if self.previous is None or not isinstance(self.previous.get("floor_heating_active"), bool):
+            return None, True
+        start, end = self.previous["time"], now.timestamp()
+        if end <= start:
+            return None, True
+        events = [(t, p) for t, p in self.operating_events if start < t <= end]
+        if not events:
+            return ((float(self.previous["floor_heating_active"]) + float(active)) / 2
+                    if isinstance(active, bool) else None), isinstance(active, bool)
+        phase, cursor, on_seconds = self.previous["floor_heating_active"], start, 0.0
+        for at, new_phase in events + [(end, active)]:
+            if phase is None or new_phase is None:
+                return None, False
+            on_seconds += (at - cursor) * phase
+            cursor, phase = at, new_phase
+        return on_seconds / (end - start), True
 
     def energy(self, now):
         return Energy(
@@ -246,7 +336,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         local_now = dt_util.as_local(now)
         dark = sun.state == "below_horizon" if sun else local_now.hour >= self.planner_settings.quiet_start_hour or local_now.hour < self.planner_settings.morning_hour
         ac_active = self.ac.blocks_learning(now)
-        if indoor is not None and not snapshot["blocked"] and not ac_active:
+        if (snapshot["thermal_valid"] and self.mode != "off" and not ac_active):
             self.room_history = [(t, v) for t, v in self.room_history if 0 <= (now - t).total_seconds() <= 3600]
             if self.room_history and (now - self.room_history[-1][0]).total_seconds() > 600:
                 self.room_history = []
@@ -254,11 +344,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 self.room_history.append((now, indoor))
         else:
             self.room_history = []
-        rate = None
-        if len(self.room_history) > 1:
-            age = (now - self.room_history[0][0]).total_seconds() / 3600
-            if age >= 0.25:
-                rate = (self.room_history[0][1] - indoor) / age
+        rate = cooling_trend([(t.timestamp(), v) for t, v in self.room_history])
         # An observed rate is an empirical result of *low-water operation*, not
         # an assertion that the heat pump or the house was unheated.
         low_water = (snapshot["output"] is not None and snapshot["output"] <= self.settings.minimum_water + 0.1
@@ -285,7 +371,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
                     and (now - self.coast_since).total_seconds() >= 3600 and stable_water)
         if observe:
             self.cooldown.observe(now, indoor, snapshot["outdoor"], eligible=eligible)
-        self.plan = decide_plan(self.planner_settings, self.cooldown, now=local_now,
+        planning_settings = replace(self.planner_settings,
+            floor_lead_hours=max(self.planner_settings.floor_lead_hours, self.settings.thermal_response_hours))
+        self.plan = decide_plan(planning_settings, self.cooldown, now=local_now,
             indoor=indoor, outdoor=snapshot["outdoor"], room_target=self.settings.target,
             forecasts=self.forecast_details, next_sunset=sunset,
             measured_cooling_rate=rate, coast_water_target=self.settings.minimum_water,
@@ -387,22 +475,30 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 blocked = "Update installed; restart Home Assistant to activate it"
             elif self.manual_hold:
                 blocked = "Manual change or unconfirmed command; select Observe then Automatic to resume"
-            snapshot["eligible"] = snapshot["eligible"] and not ac_active and self.mode != "off" and not blocked
-            if snapshot["indoor"] is not None and not snapshot["blocked"]:
+            snapshot["eligible"] = snapshot["eligible"] and not ac_active and self.mode != "off"
+            if snapshot["thermal_valid"]:
                 self.model.observe(self.previous, snapshot, eligible=snapshot["eligible"])
                 self.previous = snapshot
             else:
                 self.previous = None
                 self.model.emitter = None
             result.update(indoor=snapshot["indoor"], outdoor=snapshot["outdoor"], actual=snapshot["output"],
+                heating_enabled=snapshot["heating_enabled"], compressor_active=snapshot["compressor_active"],
+                floor_heating_active=snapshot["floor_heating_active"], learning_excluded_by_ac=ac_active,
                 model_samples=self.model.samples, model_error=self.model.error,
                 planner_status=self.planner_data.get("phase"), planner_target=self.planner_data.get("effective_target"))
+            phase = self.planner_data.get("phase")
+            rate = self.planner_data.get("observed_cooling_rate")
+            recovery_allowed = (self.mode != "off" and not blocked and not ac_active
+                                and phase not in ("coast", "ceiling_hold", "solar_wait"))
+            recovery_boost = self.recovery.update(now.timestamp(), snapshot["indoor"], self.settings.target,
+                rate, self.settings, enabled=recovery_allowed)
+            result.update(observed_cooling_rate=rate, recovery_boost=recovery_boost)
             if self.mode == "off":
                 result.update(status="off", reason="Automatic control and learning disabled")
             elif blocked:
                 result.update(status="paused", reason=blocked)
             else:
-                phase = self.planner_data.get("phase")
                 planned = self.plan is not None and phase in ("prepare", "coast", "recovery", "ceiling_hold", "solar_wait")
                 effective_settings = replace(self.settings,
                     target=self.plan.effective_target if planned and phase != "recovery" else self.settings.target,
@@ -413,7 +509,11 @@ class HeatingCoordinator(DataUpdateCoordinator):
                              and snapshot["indoor"] < self.planner_settings.preheat_ceiling)
                 indoor = min(snapshot["indoor"], effective_settings.target) if shield_ac else snapshot["indoor"]
                 decision = decide(effective_settings, Model() if ac_active else self.model,
-                    indoor, snapshot["outdoor"], forecasts, sustained)
+                    indoor, snapshot["outdoor"], forecasts, sustained,
+                    actual_water=snapshot["water"] if snapshot["water"] is not None else snapshot["output"],
+                    actual_setpoint=snapshot["output"],
+                    measured_cooling_rate=rate if recovery_allowed else None,
+                    recovery_boost=recovery_boost)
                 if planned:
                     proposed = decision.proposed
                     if phase != "recovery":
@@ -422,6 +522,14 @@ class HeatingCoordinator(DataUpdateCoordinator):
                     decision = replace(decision,
                         proposed=max(self.settings.minimum_water, min(self.settings.maximum_water, proposed)),
                         predicted_minimum=None, reason=self.planner_data["reason"])
+                # Keep slow floor delivery while a cold room is still falling.
+                # Deliberate night coasting/ceiling reductions retain their own
+                # comfort policy. The final limiter remains authoritative.
+                if (recovery_allowed and rate is not None and rate > 0.05
+                        and snapshot["indoor"] < effective_settings.target - self.settings.comfort_band
+                        and decision.proposed < snapshot["output"]):
+                    decision = replace(decision, proposed=snapshot["output"], predicted_minimum=None,
+                        reason=decision.reason + "; holding floor heat while the below-target room is cooling")
                 # Actual room overheating overrides every phase, including a
                 # missing forecast or recovery. AC attribution must never hide
                 # the comfort ceiling; water slew limits still apply below.
@@ -429,6 +537,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
                     decision = replace(decision, proposed=self.settings.minimum_water, predicted_minimum=None,
                                        reason="Room reached the preheat ceiling; reducing floor heat within water limits")
                 result.update(proposed=decision.proposed, prediction=decision.predicted_minimum, reason=decision.reason)
+                result.update(planning_outdoor=decision.planning_outdoor,
+                              cooling_compensation=decision.cooling_compensation)
                 limited = self.output_limit(decision.proposed, snapshot["output"], now)
                 result["limited"] = limited
                 if limited is None:

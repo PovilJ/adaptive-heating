@@ -23,7 +23,8 @@ class Measurements(unittest.TestCase):
 
     def test_invalid_settings_are_rejected(self):
         for change in ({"minimum_water": 40, "maximum_water": 25}, {"target": math.nan},
-                       {"preheat_degrees": 2}, {"rise_per_hour": 0}, {"control_minutes": 0}):
+                       {"preheat_degrees": 2}, {"rise_per_hour": 0}, {"control_minutes": 0},
+                       {"thermal_response_hours": 0.25}, {"thermal_response_hours": 13}):
             with self.assertRaises(ValueError):
                 Settings(**change)
 
@@ -90,6 +91,55 @@ class Commands(unittest.TestCase):
 
 
 class Predictions(unittest.TestCase):
+    def test_sustained_cold_forecast_prepares_before_model_is_trained(self):
+        mild = engine.decide(Settings(), Model(), 22, 5, [5] * 12, actual_setpoint=30)
+        cold = engine.decide(Settings(), Model(), 22, 5, [-20] * 12, actual_setpoint=30)
+        self.assertGreater(cold.proposed, mild.proposed)
+        self.assertEqual(cold.proposed, 40)
+        self.assertFalse(cold.model_used)
+        self.assertIsNone(cold.predicted_minimum)
+        self.assertIn("preparing before", cold.reason)
+
+    def test_distant_cold_outside_floor_and_water_lead_does_not_preheat_now(self):
+        mild = engine.decide(Settings(), Model(), 22, 5, [5] * 12, actual_setpoint=33)
+        distant = engine.decide(Settings(), Model(), 22, 5, [5] * 9 + [-20] * 3, actual_setpoint=33)
+        self.assertEqual(distant.proposed, mild.proposed)
+
+    def test_single_cold_spike_or_future_warming_does_not_shift_curve(self):
+        mild = engine.decide(Settings(), Model(), 22, 5, [5] * 12)
+        spike = engine.decide(Settings(), Model(), 22, 5, [5, -40] + [5] * 10)
+        warmer = engine.decide(Settings(), Model(), 22, 5, [15] * 12)
+        self.assertEqual(spike.proposed, mild.proposed)
+        self.assertEqual(warmer.proposed, mild.proposed)
+
+    def test_slow_water_ramp_starts_preparation_earlier(self):
+        forecast = [5] * 5 + [-20] * 7
+        high = engine.decide(Settings(), Model(), 22, 5, forecast, actual_setpoint=40)
+        low = engine.decide(Settings(), Model(), 22, 5, forecast, actual_setpoint=25)
+        self.assertGreater(low.proposed, high.proposed)
+
+    def test_observed_cooling_prepares_before_room_falls_below_target(self):
+        steady = engine.decide(Settings(), Model(), 22.1, 5, [])
+        falling = engine.decide(Settings(), Model(), 22.1, 5, [], measured_cooling_rate=.2)
+        self.assertAlmostEqual(falling.proposed - steady.proposed, 1.2)
+        self.assertIsNone(falling.predicted_minimum)
+        warm = engine.decide(Settings(), Model(), 22.1, 5, [], measured_cooling_rate=-.2)
+        self.assertEqual(warm.proposed, steady.proposed)
+
+    def test_recovery_compensation_is_bounded_and_model_cannot_cancel_it(self):
+        model = Model(samples=100, emitter=40)
+        decision = engine.decide(Settings(), model, 21.5, 5, [5] * 12,
+                                 measured_cooling_rate=10, recovery_boost=10)
+        self.assertEqual(decision.cooling_compensation, 2)
+        self.assertEqual(decision.recovery_boost, 2)
+        self.assertGreaterEqual(decision.proposed, 37.65)
+        self.assertLessEqual(decision.proposed, 40)
+
+    def test_invalid_forecast_hour_does_not_join_cold_points_across_gap(self):
+        decision = engine.decide(Settings(), Model(), 22, 5, [-20, math.nan, -20])
+        self.assertEqual(decision.planning_outdoor, 5)
+        self.assertIn("forecast unavailable", decision.reason)
+
     def test_forecast_outage_uses_room_feedback_not_fixed_30(self):
         cool = engine.decide(Settings(), Model(), 21, 0, [])
         warm = engine.decide(Settings(), Model(), 24, 0, [])
@@ -97,7 +147,7 @@ class Predictions(unittest.TestCase):
         self.assertIn("forecast unavailable", warm.reason)
         self.assertIsNone(warm.predicted_minimum)
 
-    def test_untrained_model_does_not_change_the_curve(self):
+    def test_untrained_model_does_not_supply_a_model_projection(self):
         decision = engine.decide(Settings(), Model(), 21, 0, [-10] * 12)
         self.assertFalse(decision.model_used)
 
@@ -130,7 +180,7 @@ class Predictions(unittest.TestCase):
         self.assertEqual(model.loss, 0.012)
         self.assertEqual(model.gain, 0.005)
 
-    def test_hot_water_or_sun_intervals_do_not_fit(self):
+    def test_ineligible_intervals_do_not_fit(self):
         model = Model()
         previous = {"time": 0, "indoor": 22, "outdoor": 0, "water": 30, "eligible": False}
         current = dict(previous, time=300, indoor=22.1, eligible=True)
@@ -143,6 +193,90 @@ class Predictions(unittest.TestCase):
         model.observe(previous, dict(previous, time=7200, water=25), eligible=True)
         self.assertEqual(model.samples, 0)
         self.assertEqual(model.emitter, 25)
+
+    def test_compressor_stop_retains_floor_heat_and_learns_idle_response(self):
+        model = Model(emitter=32)
+        previous = {"time": 0, "indoor": 22, "outdoor": 5, "water": 32,
+                    "eligible": True, "floor_heating_active": True}
+        current = dict(previous, time=300, indoor=21.99, water=22,
+                       floor_heating_active=False, compressor_on_fraction=0)
+        model.observe(previous, current, eligible=True)
+        self.assertGreater(model.emitter, 31)
+        self.assertLess(model.emitter, 32)
+        self.assertEqual(model.samples, 1)
+        self.assertAlmostEqual(model.idle_hours, 1 / 12)
+        self.assertEqual(model.heating_hours, 0)
+
+    def test_idle_learning_survives_missing_circuit_water(self):
+        model = Model(emitter=30)
+        previous = {"time": 0, "indoor": 22, "outdoor": 5, "water": None,
+                    "eligible": True, "floor_heating_active": False}
+        model.observe(previous, dict(previous, time=300, indoor=21.99), eligible=True)
+        self.assertEqual(model.samples, 1)
+        self.assertGreater(model.emitter, 29)
+
+    def test_floor_response_time_changes_stored_heat_release(self):
+        previous = {"time": 0, "indoor": 22, "outdoor": 5, "water": 22,
+                    "eligible": True, "floor_heating_active": False}
+        slow, fast = Model(lag_hours=6, emitter=32), Model(lag_hours=1, emitter=32)
+        current = dict(previous, time=3600, indoor=21.9)
+        for model in (slow, fast):
+            model.observe(previous, current, eligible=True)
+        self.assertGreater(slow.emitter, fast.emitter)
+        self.assertGreater(slow.emitter, 30)
+
+    def test_cold_floor_room_keeps_cooling_before_new_heat_arrives(self):
+        path = Model(emitter=22, lag_hours=6).predict(22, 35, [-10] * 12)
+        self.assertLess(path[0], 22)
+        self.assertLess(min(path), path[-1])
+
+    def test_prediction_allows_for_water_recovery_before_floor_warming(self):
+        model = Model(emitter=22, samples=100)
+        instant = model.predict(22, 35, [-10] * 6)
+        gradual = model.predict(22, 35, [-10] * 6, start_water=25, settings=Settings())
+        self.assertLess(min(gradual), min(instant))
+        self.assertLess(gradual[0], instant[0])
+
+    def test_learning_coverage_is_restored_but_floor_state_is_not(self):
+        model = Model.restore({"samples": 100, "heating_hours": 4, "idle_hours": 8, "emitter": 32})
+        self.assertEqual(model.heating_hours, 4)
+        self.assertEqual(model.idle_hours, 8)
+        self.assertIsNone(model.emitter)
+
+
+class RecoveryFeedback(unittest.TestCase):
+    def test_room_trend_uses_half_hour_and_rejects_short_or_gapped_history(self):
+        history = [(i * 300, 22 - .2 * i / 12) for i in range(7)]
+        self.assertAlmostEqual(engine.cooling_trend(history), .2)
+        self.assertIsNone(engine.cooling_trend(history[:2]))
+        self.assertIsNone(engine.cooling_trend([(i * 700, value) for i, (_, value) in enumerate(history)]))
+        rising = [(time, 44 - value) for time, value in history]
+        self.assertAlmostEqual(engine.cooling_trend(rising), -.2)
+
+    def test_stagnant_recovery_waits_for_floor_response_then_rises_in_stages(self):
+        recovery, settings = engine.Recovery(), Settings()
+        for time in range(0, 180 * 60, 300):
+            self.assertEqual(recovery.update(time, 21.5, 22, 0, settings, enabled=True), 0)
+        self.assertEqual(recovery.update(180 * 60, 21.5, 22, 0, settings, enabled=True), .5)
+        for time in range(185 * 60, 210 * 60, 300):
+            self.assertEqual(recovery.update(time, 21.5, 22, 0, settings, enabled=True), .5)
+        self.assertEqual(recovery.update(210 * 60, 21.5, 22, 0, settings, enabled=True), 1)
+        for time in range(215 * 60, 360 * 60 + 1, 300):
+            recovery.update(time, 21.5, 22, 0, settings, enabled=True)
+        self.assertEqual(recovery.boost, 2)
+
+    def test_improving_room_decays_assistance_before_target_and_clears_at_target(self):
+        recovery = engine.Recovery(since=0, last_time=10800, boost=1.5)
+        boost = recovery.update(11100, 21.8, 22, -.2, Settings(), enabled=True)
+        self.assertAlmostEqual(boost, 1.5 - 1 / 12)
+        self.assertIsNone(recovery.since)
+        self.assertEqual(recovery.update(11400, 22, 22, -.2, Settings(), enabled=True), 0)
+
+    def test_ac_invalid_trend_or_sampling_gap_clears_recovery(self):
+        for enabled, rate, now in ((False, .2, 300), (True, None, 300), (True, .2, 1200)):
+            recovery = engine.Recovery(since=0, last_time=0, boost=2)
+            self.assertEqual(recovery.update(now, 21.5, 22, rate, Settings(), enabled=enabled), 0)
+            self.assertIsNone(recovery.since)
 
 
 if __name__ == "__main__":
