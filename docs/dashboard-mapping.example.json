@@ -32,6 +32,10 @@
     "ac_status": "sensor.adaptive_heating_ac_assistance",
     "ac_mode": "select.adaptive_heating_ac_assistance_mode",
     "ac_power": "sensor.adaptive_heating_ac_electrical_power",
-    "ac_energy": "sensor.adaptive_heating_ac_session_electricity"
+    "ac_energy": "sensor.adaptive_heating_ac_session_electricity",
+    "live_power": "sensor.heat_pump_total_power",
+    "energy_daily": "sensor.heat_pump_daily_energy",
+    "energy_monthly": "sensor.heat_pump_monthly_energy",
+    "ac_room": "sensor.living_room_temperature"
   }
 }
