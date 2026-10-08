@@ -1,7 +1,7 @@
 """Shared settings. No installation-specific entity IDs belong here."""
 
 DOMAIN = "adaptive_heating"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 MIN_HA_VERSION = "2026.7.0"
 REPOSITORY = "PovilJ/adaptive-heating"
 MODES = ["off", "observe", "automatic"]

@@ -118,6 +118,13 @@ def surplus_available(energy: Energy, settings: Settings) -> bool:
     return True
 
 
+# Learning cadence and step size of the original PyScript controller.
+WINDOW_MINIMUM = 2 * 3600
+WINDOW_MAXIMUM = 3 * 3600
+LEARN_EVERY = 30 * 60
+LEARNING_RATE = 0.005
+
+
 @dataclass
 class Model:
     """Empirical temperature response, not a physical heat/energy meter."""
@@ -129,6 +136,12 @@ class Model:
     error: float = 0.0
     heating_hours: float = 0.0
     idle_hours: float = 0.0
+
+    def __post_init__(self):
+        # Learning window and cadence are runtime state: never stored, so a
+        # restart cannot join measurements across the outage.
+        self.window = []
+        self.learned_at = None
 
     @classmethod
     def restore(cls, data: dict | None) -> Model:
@@ -149,26 +162,32 @@ class Model:
 
     @property
     def usable(self) -> bool:
+        # 24 half-hourly fits are about two nights; error is degrees missed over 2–3 hours.
         return self.samples >= 24 and self.error <= 0.3
 
     def observe(self, previous: dict | None, current: dict, *, eligible: bool) -> None:
-        """Bounded fitting using consecutive fresh measurements, actual elapsed time.
+        """Track floor heat every interval; learn slowly from 2–3 hour night windows.
 
-        Both ends must have valid temperatures and known floor-heating activity.
-        AC-heated intervals are excluded by the adapter. Unknown
-        disturbances are rejected by a residual limit. Samples still advance in
-        the HA adapter even when fitting is rejected, avoiding stale night trends.
+        A slab moves the room about one sensor step per half hour, so a single
+        five-minute interval says nothing about the house. As in the original
+        PyScript, the room is compared with itself 2–3 hours earlier, at most
+        every 30 minutes, only at night (no sun through the windows), with heat
+        loss fitted while the floor is off and floor gain while it is heating,
+        in small capped steps. AC-heated intervals are excluded by the adapter.
         """
         water = current.get("water")
         phase = current.get("floor_heating_active", current.get("compressor_active"))
         if finite(water) is None and phase is not False:
             self.emitter = None
+            self.window = []
             return
         if not previous:
+            self.window = []
             self.emitter = water if finite(water) is not None and 0 <= water <= 45 else current["indoor"]
             return
         dt = (current["time"] - previous["time"]) / 3600
         if not 1 / 60 <= dt <= 1:
+            self.window = []
             self.emitter = water if finite(water) is not None and 0 <= water <= 45 else current["indoor"]
             return
         initial = previous.get("water")
@@ -195,28 +214,41 @@ class Model:
         source = duty * circuit + (1 - duty) * air
         decay = math.exp(-dt / self.lag_hours)
         self.emitter = source + (start_emitter - source) * decay
-        if not eligible or not previous.get("eligible", False):
+        if (not eligible or not previous.get("eligible", False) or not current.get("night", True)
+                or finite(current.get("outdoor")) is None):
+            self.window = []
             return
-        if previous.get("outdoor") is None or current.get("outdoor") is None:
+        now = current["time"]
+        self.window.append((now, current["indoor"], current["outdoor"],
+                            max(0.0, self.emitter - current["indoor"]), duty * dt))
+        self.window = [row for row in self.window if now - row[0] <= WINDOW_MAXIMUM]
+        start = self.window[0]
+        hours = (now - start[0]) / 3600
+        if hours < WINDOW_MINIMUM / 3600 or (self.learned_at is not None and 0 <= now - self.learned_at < LEARN_EVERY):
             return
-        air = previous["indoor"]
-        delta_outdoor = air - previous["outdoor"]
-        # Average floor state over the whole interval, including its residual
-        # output after a stop, rather than labelling every idle drop pure loss.
-        mean_emitter = source + (start_emitter - source) * self.lag_hours * (1 - decay) / dt
-        delta_water = max(0, mean_emitter - air)
-        rate = self.gain * delta_water - self.loss * delta_outdoor
-        residual = current["indoor"] - (air + rate * dt)
-        self.error = 0.9 * self.error + 0.1 * abs(residual)
-        if abs(residual) > 0.3 or dt < 4 / 60:
+        self.learned_at = now
+        rows = self.window[1:]
+        delta_outdoor = sum(row[1] - row[2] for row in rows) / len(rows)
+        delta_water = sum(row[3] for row in rows) / len(rows)
+        heating = sum(row[4] for row in rows) / hours
+        rate = (current["indoor"] - start[1]) / hours
+        if abs(delta_outdoor) < 1:
             return
-        norm = 1 + delta_outdoor**2 + delta_water**2
-        correction = 0.015 * residual / dt / norm
-        self.loss = clamp(self.loss - correction * delta_outdoor, 0.001, 0.08)
-        self.gain = clamp(self.gain + correction * delta_water, 0.005, 0.15)
+        error = rate - (self.gain * delta_water - self.loss * delta_outdoor)
+        if heating == 0 and delta_water < 3:
+            # Warming with the floor off is an oven, guests or sunshine stored in the walls.
+            if rate > 0.05:
+                return
+            self.loss = clamp(self.loss - clamp(error * LEARNING_RATE / delta_outdoor, -0.0003, 0.0003), 0.001, 0.08)
+        elif heating >= 0.5 and delta_water >= 1:
+            self.gain = clamp(self.gain + clamp(error * LEARNING_RATE / delta_water, -0.0005, 0.0005), 0.005, 0.15)
+        else:
+            return
+        # Degrees by which the model missed the room over the whole window.
+        self.error = 0.9 * self.error + 0.1 * abs(error * hours)
         self.samples += 1
-        self.heating_hours += duty * dt
-        self.idle_hours += (1 - duty) * dt
+        self.heating_hours += heating * LEARN_EVERY / 3600
+        self.idle_hours += (1 - heating) * LEARN_EVERY / 3600
 
     def predict(self, indoor: float, water: float, forecasts: list[float], *,
                 start_water: float | None = None, settings: Settings | None = None) -> list[float]:

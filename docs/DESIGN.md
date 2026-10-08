@@ -57,17 +57,25 @@ the heating control path.
 ## Deliberately bounded first model
 
 The starting model has room temperature and a lagged emitter/building heat state.
-It fits two bounded temperature-response coefficients from suitable consecutive
-measurements across known heating and cooling activity. The initial three-hour
+It fits two bounded temperature-response coefficients the way the original
+PyScript did: at most every 30 minutes it compares the room with itself 2–3
+hours earlier, only at night, adjusting heat loss while the floor is off and
+floor gain while it is heating, by 0.5 % of the error with a hard cap per fit.
+Five-minute polls only track the floor-heat estimate; one poll moves the room
+less than a sensor step and teaches nothing. On first use the coefficients start
+from the PyScript's `input_number.heating_k_loss`/`heating_k_gain` when present. The initial three-hour
 floor response is now configurable; automatic identification remains future work. Coefficients
 and predicted temperature errors are empirical; none represents measured COP.
 
 Forecast correction remains within 2 °C of the curve. The model has no influence
-until 24 accepted samples exist and its recent one-step residual is small. This
+until 24 accepted fits exist (about two nights) and its recent error across the
+2–3 hour window is at most 0.3 °C. This
 is a conservative gate, not a statistical confidence guarantee or proof of
 twelve-hour forecast accuracy. There is no automatic sunny-weather heat injection.
-Weather labels no longer exclude response observations; consequently empirical
-loss/gain can include unmeasured window and internal gains.
+Daylight intervals are not fitted, so sunshine through the windows does not
+enter loss/gain; internal gains at night still can. In continuous cold-weather
+heating the floor is never off, so loss stays at its last value and gain absorbs
+the difference.
 
 In 0.3.1, the baseline itself anticipates sustained forecast cooling within the
 configured floor delay, water ramp and one command opportunity. Two adjacent

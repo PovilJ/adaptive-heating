@@ -203,6 +203,52 @@ learning hours are initially zero. Device command acknowledgment, learned
 response and room recovery are not established by this initial evaluation.
 
 
+### October 8 compact dashboard and live power correction
+
+Redesigned all three dashboard views as **Now**, **Trends** and **System**, keeping
+paths `0`, `adaptive-heating` and `equipment`. The owner emphasized the original
+compact cards, controls inside their readings, icons and meaningful colors.
+The first-house presentation groups measured room temperature with target
+buttons, current activity with floor-control mode, and tank/AC information with
+their controls. It reuses existing Mushroom and Stack In Card resources; native
+cards remain the offline generator's default for other installations. No
+frontend resource was installed or reordered. The activity badge remains at the
+top right of Room comfort.
+
+Now has paired live power/water readings and a brief conditional next plan;
+history, learning and full session explanations are in Trends. System retains
+quiet mode, manual water adjustment, disinfection Run/Cancel with the Run
+confirmation, Evaluate now, integration settings and HACS updates. The phone
+shows five recent decision explanations; the wider table retains up to 20 and
+spans the available view width. Coming next reads the live device target rather
+than the coordinator's pre-command snapshot. Observe and unavailable-controller
+wording do not imply a pending automatic action.
+
+Corrected the existing total-power template, which summed native phase kW but
+labeled the result W: the sum is now multiplied by 1000. Adjusted its COP
+consumer to divide W by 1000, preserving that calculation's scale. Configuration
+validation and template reload passed; a live check showed 1430 W against
+1.430 kW across the phase meters. Earlier mis-scaled power/calculated-energy
+history was preserved. Now uses the corrected native total-power entity, while
+Trends uses native combined/daily/monthly energy counters. Existing COP remains
+a sensor estimate, not newly validated physical efficiency.
+
+Seven dashboard tests pass on Python 3.14.7 / HA 2026.7.4, including the live-
+target-versus-pre-command regression in both presentations. All 128 combinations
+of seven optional compact mappings rendered with missing data without inventing
+measurements. The final dashboard's 48 entity references and 29 templates were
+checked against live HA; save/read-back matched. Phone and desktop layouts were
+inspected in Chrome. Main Automatic, tank Off, AC Observe and the owner's latest
+22.5 °C room target remained unchanged. Dashboard verification did not operate
+equipment, reload the integration or restart HA.
+
+Original and immediately preceding dashboard configurations are preserved in
+ignored backups and exported as YAML. The final dashboard/mapping, live renders,
+control snapshots and complete pre-redesign configuration are kept in
+`.local/ha-dashboard-backups/<timestamp>-redesign/`; power-source backups are in
+a separate `<timestamp>-live-power/` directory. This establishes compact
+presentation and current power units, not field comfort or energy savings.
+
 These are pending work, not promised release dates or completed acceptance checks.
 
 1. **Deployment validation:** isolated setup/options/reload/unload and the live
@@ -246,3 +292,24 @@ status and pending work above. Distinguish implemented, automatically tested,
 tested in isolated HA and observed on real equipment. Record unknown dates as
 unknown and leave historical validation results attached to their original
 version/environment. Update the migration comparison when behavior changes.
+
+### October 8 tabbed dashboard
+
+Replaced Now/Trends/System/Original with five icon tabs — Home, Trends, Plan,
+Hot water and System — built from Mushroom cards and apexcharts-card in the
+style of the original dashboard. The generator's native fallback, the
+`presentation.compact_mushroom` switch and the `comparison_view` copy were
+removed. Six dashboard tests pass; all 89 templates rendered against live HA
+2026.9.3 and the saved dashboard was read back. The layout was not inspected in
+a browser. See [DASHBOARD.md](DASHBOARD.md).
+
+### October 8 learning returned to the original pace — 0.3.2
+
+Response learning used five-minute steps, during which the room moves less than
+the sensor's 0.1 °C resolution, and declared itself usable after two hours.
+Restored the PyScript's rules inside the lag model: 2–3 hour night windows, a
+fit every 30 minutes, loss fitted with the floor off and gain with it heating,
+0.5 % steps capped per fit. Stored revision-2 counts are discarded and the
+coefficients start once from the PyScript helpers (0.01567 / 0.03318 in the
+first house). Night-cooldown samples now span an hour and calibration needs six
+hours. 209 tests pass on HA 2026.7.4. No field result is claimed.

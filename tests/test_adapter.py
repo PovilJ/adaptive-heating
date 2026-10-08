@@ -87,7 +87,7 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
                 return None
             return {"weather.house": {"forecast": [{"datetime": (self.now + timedelta(hours=i)).isoformat(), "temperature": 0} for i in range(12)]}}
         self.hass = types.SimpleNamespace(states=types.SimpleNamespace(get=self.states.get),
-            storage={}, services=types.SimpleNamespace(async_call=service))
+            storage={}, is_running=True, services=types.SimpleNamespace(async_call=service))
         self.entry = types.SimpleNamespace(data=self.config, options={}, entry_id="test", title="Test heating")
         self.releases = types.SimpleNamespace(restart_pending=False)
         self.controller = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
@@ -211,16 +211,39 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         for _ in range(3):
             self.now += timedelta(minutes=5)
             await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.model.samples, 3)
-        self.assertAlmostEqual(self.controller.model.idle_hours, .25)
-        self.assertEqual(self.controller.model.heating_hours, 0)
+        # Three five-minute intervals are far too short to say anything about a slab.
+        self.assertEqual(self.controller.model.samples, 0)
 
-    async def test_sunshine_does_not_disable_response_learning(self):
-        self.set_state("weather.house", "sunny", temperature=0, temperature_unit="°C")
+    async def night_of_refreshes(self, hours):
+        for _ in range(int(hours * 12)):
+            self.now += timedelta(minutes=5)
+            for entity, state in list(self.states.items()):
+                self.set_state(entity, state.state, **state.attributes)
+            await self.controller.async_request_refresh()
+
+    async def test_response_learning_needs_hours_of_night_and_stops_in_daylight(self):
+        self.now = self.now.replace(hour=22, minute=0)
         await self.controller.async_request_refresh()
-        self.now += timedelta(minutes=5)
+        await self.night_of_refreshes(1.9)
+        self.assertEqual(self.controller.model.samples, 0)
+        await self.night_of_refreshes(1.3)
+        learned = self.controller.model.samples
+        self.assertIn(learned, (2, 3))
+        self.assertAlmostEqual(self.controller.model.heating_hours, learned / 2)
+        self.now = self.now.replace(hour=12)
         await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.model.samples, 1)
+        await self.night_of_refreshes(3)
+        self.assertEqual(self.controller.model.samples, learned)
+
+    async def test_first_run_starts_from_the_original_scripts_learned_values(self):
+        self.set_state("input_number.heating_k_loss", "0.01567")
+        self.set_state("input_number.heating_k_gain", "0.03318")
+        await self.controller.async_load()
+        await self.controller.async_request_refresh()
+        self.assertEqual((self.controller.model.loss, self.controller.model.gain), (0.01567, 0.03318))
+        self.set_state("input_number.heating_k_loss", "0.03")
+        await self.controller.async_request_refresh()
+        self.assertEqual(self.controller.model.loss, 0.01567)
 
     async def test_tank_heating_still_observes_floor_cooling(self):
         await self.controller.async_request_refresh()
@@ -238,7 +261,6 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.controller.previous["compressor_active"])
         self.assertFalse(self.controller.previous["floor_heating_active"])
         self.assertLess(self.controller.model.emitter, stored)
-        self.assertGreater(self.controller.model.samples, 0)
 
     async def test_short_compressor_cycle_is_measured_between_polls(self):
         self.map_heating_mode()
@@ -249,8 +271,6 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.now += timedelta(minutes=5)
         await self.controller.async_request_refresh()
         self.assertAlmostEqual(self.controller.previous["compressor_on_fraction"], .4)
-        self.assertAlmostEqual(self.controller.model.heating_hours, 120 / 3600)
-        self.assertAlmostEqual(self.controller.model.idle_hours, 180 / 3600)
 
     async def test_short_unavailable_activity_interval_does_not_fit(self):
         await self.controller.async_request_refresh()

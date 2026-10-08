@@ -19,10 +19,13 @@ from .const import DEFAULTS, DOMAIN, MODES
 from .disinfection import DEFAULTS as DHW_DEFAULTS
 from .disinfection_controller import DisinfectionController
 from .ac_controller import ACController, DEFAULTS as AC_DEFAULTS
-from .engine import Energy, Model, Recovery, Settings, cooling_trend, decide, finite, limited_output, power_watts, surplus_available, temperature
+from .engine import Energy, Model, Recovery, Settings, clamp, cooling_trend, decide, finite, limited_output, power_watts, surplus_available, temperature
 from .planner import DEFAULTS as PLAN_DEFAULTS, CooldownModel, ForecastPoint, PlannerSettings, decide_plan
 
 _LOGGER = logging.getLogger(__name__)
+# Revision 3: night-window learning. Older stored counts are not comparable.
+MODEL_REVISION = 3
+LEGACY_LOSS_GAIN = ("input_number.heating_k_loss", "input_number.heating_k_gain")
 
 
 def state_matches(state, expected):
@@ -42,6 +45,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.settings = Settings(**{k: self.config[k] for k in Settings.__dataclass_fields__ if k in self.config})
         self.planner_settings = PlannerSettings(**{k: self.config[k] for k in PlannerSettings.__dataclass_fields__})
         self.cooldown = CooldownModel()
+        self.dark = False
+        self.legacy_seed_pending = False
         self.plan = None
         self.planner_data = {}
         self.forecast_details = []
@@ -85,7 +90,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
     async def async_load(self):
         data = await self.store.async_load() or {}
         if data.get("identity") == self.identity():
-            if data.get("model_revision") == 2:
+            if data.get("model_revision") == MODEL_REVISION:
                 self.model = Model.restore(data.get("model"))
                 self.model.lag_hours = self.settings.thermal_response_hours
             if data.get("cooldown_regime") == self.cooldown_regime():
@@ -95,15 +100,28 @@ class HeatingCoordinator(DataUpdateCoordinator):
                           and self.planner_settings.night_minimum <= target <= self.planner_settings.preheat_ceiling)
             if compatible and target is not None and 10 <= target <= 30 and data.get("configured_target") == self.config["target"]:
                 self.settings.target = target
+        # Earlier revisions counted five-minute fits; those counts and errors do
+        # not mean the same thing, so start again from the PyScript's values.
+        self.legacy_seed_pending = data.get("model_revision") != MODEL_REVISION
         # Observe on every restart/reconfiguration, regardless of stored mode.
         await self.disinfection.async_load()
         await self.ac.async_load()
 
     async def async_save(self):
-        await self.store.async_save({"identity": self.identity(), "model_revision": 2,
+        await self.store.async_save({"identity": self.identity(), "model_revision": MODEL_REVISION,
                                     "model": asdict(self.model), "target": self.settings.target,
                                     "configured_target": self.config["target"], "cooldown": self.cooldown.to_dict(),
                                     "cooldown_regime": self.cooldown_regime()})
+
+    def seed_from_legacy(self):
+        """Start once from the loss/gain the original PyScript learned, if its helpers remain."""
+        if not self.legacy_seed_pending or not self.hass.is_running:
+            return
+        self.legacy_seed_pending = False
+        values = [finite(state.state) if state else None
+                  for state in map(self.hass.states.get, LEGACY_LOSS_GAIN)]
+        if self.model.samples == 0 and None not in values:
+            self.model.loss, self.model.gain = clamp(values[0], 0.001, 0.08), clamp(values[1], 0.005, 0.15)
 
     def cooldown_regime(self):
         return {"minimum_water": self.settings.minimum_water, "sun_entity": self.config.get("sun_entity")}
@@ -334,7 +352,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
             except (ValueError, TypeError):
                 pass
         local_now = dt_util.as_local(now)
-        dark = sun.state == "below_horizon" if sun else local_now.hour >= self.planner_settings.quiet_start_hour or local_now.hour < self.planner_settings.morning_hour
+        dark = self.dark = sun.state == "below_horizon" if sun else local_now.hour >= self.planner_settings.quiet_start_hour or local_now.hour < self.planner_settings.morning_hour
         ac_active = self.ac.blocks_learning(now)
         if (snapshot["thermal_valid"] and self.mode != "off" and not ac_active):
             self.room_history = [(t, v) for t, v in self.room_history if 0 <= (now - t).total_seconds() <= 3600]
@@ -476,6 +494,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
             elif self.manual_hold:
                 blocked = "Manual change or unconfirmed command; select Observe then Automatic to resume"
             snapshot["eligible"] = snapshot["eligible"] and not ac_active and self.mode != "off"
+            snapshot["night"] = self.dark
+            self.seed_from_legacy()
             if snapshot["thermal_valid"]:
                 self.model.observe(self.previous, snapshot, eligible=snapshot["eligible"])
                 self.previous = snapshot

@@ -11,7 +11,7 @@ when needed.
 Changing config-entry or stored-data schemas requires a tested migration; never
 replace users' selections with new defaults.
 
-Current source is **experimental 0.3.1**, installed and restarted in the first
+Current source is **experimental 0.3.2**, installed and restarted in the first
 house on October 8; this is not a numbered GitHub release. Updating metadata or
 building an archive does not publish it or change a live HA installation.
 Publication and deployment are separate actions after review and commissioning.

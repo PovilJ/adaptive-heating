@@ -79,8 +79,10 @@ rather than relying solely on a lowered setpoint. The adapter requires at least
 60 minutes at the minimum requested target before accepting samples. Measured
 average return/supply water must be within 2 °C above that minimum; the rolling
 hour must contain at least seven readings, no gaps over ten minutes, no more than
-1 °C water variation, and at most 0.5 °C net change. A model needs at least
-12 eligible samples totaling two hours before it reports calibrated.
+1 °C water variation, and at most 0.5 °C net change. Each sample compares the room
+with itself about an hour earlier, because cooling of roughly 0.2 °C/h is
+smaller than the sensor step over a shorter interval. A model needs six such
+samples, six hours of coasting, before it reports calibrated.
 
 These measure the house under low-water operation. Residual slab heat and any
 remaining heat-pump output can still affect them; they are not a measurement

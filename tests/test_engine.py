@@ -203,16 +203,64 @@ class Predictions(unittest.TestCase):
         model.observe(previous, current, eligible=True)
         self.assertGreater(model.emitter, 31)
         self.assertLess(model.emitter, 32)
-        self.assertEqual(model.samples, 1)
-        self.assertAlmostEqual(model.idle_hours, 1 / 12)
-        self.assertEqual(model.heating_hours, 0)
+        # One five-minute interval moves the floor estimate but teaches nothing.
+        self.assertEqual(model.samples, 0)
 
-    def test_idle_learning_survives_missing_circuit_water(self):
+    def night(self, model, hours, *, cooling=0.0, heating=False, start=0, **extra):
+        """Feed five-minute observations; cooling is °C/h, negative warms the room."""
+        previous = None
+        for i in range(int(hours * 12) + 1):
+            current = {"time": start + i * 300, "indoor": 22 - cooling * i / 12, "outdoor": 0,
+                       "water": 32 if heating else None, "eligible": True,
+                       "floor_heating_active": heating, **extra}
+            model.observe(previous, current, eligible=current["eligible"])
+            previous = current
+
+    def test_floor_off_night_learns_only_loss_every_half_hour(self):
+        model = Model(emitter=22)
+        self.night(model, 1.9, cooling=0.4)
+        self.assertEqual(model.samples, 0)
+        model = Model(emitter=22)
+        self.night(model, 3.2, cooling=0.4)
+        self.assertEqual(model.samples, 3)
+        self.assertAlmostEqual(model.idle_hours, 1.5)
+        self.assertEqual(model.heating_hours, 0)
+        self.assertEqual(model.gain, Model().gain)
+        self.assertGreater(model.loss, Model().loss)
+        # Legacy pace: far less than one percent per fit.
+        self.assertLess(model.loss, Model().loss * 1.01)
+
+    def test_heating_night_learns_only_gain_and_one_fit_is_capped(self):
+        model = Model(emitter=32)
+        self.night(model, 3.2, cooling=-0.5, heating=True)
+        self.assertEqual(model.samples, 3)
+        self.assertEqual(model.loss, Model().loss)
+        self.assertGreater(model.gain, Model().gain)
+        self.assertAlmostEqual(model.heating_hours, 1.5)
+        wild = Model(emitter=22)
+        self.night(wild, 2.2, cooling=1.5)
+        self.assertAlmostEqual(wild.loss, Model().loss + 0.0003)
+        # The error is degrees missed across the window, not a five-minute residual.
+        self.assertGreater(wild.error, 0.1)
+
+    def test_daylight_disturbance_and_interruptions_teach_nothing(self):
+        for options in ({"night": False}, {"cooling": -0.2}):
+            model = Model(emitter=22)
+            self.night(model, 3.2, **{"cooling": 0.4} | options)
+            self.assertEqual((model.samples, model.loss, model.gain), (0, Model().loss, Model().gain))
+        model = Model(emitter=22)
+        self.night(model, 1.5, cooling=0.4)
+        self.night(model, 1.5, cooling=0.4, start=1.5 * 3600 + 300, eligible=False)
+        self.assertEqual(model.window, [])
+        self.night(model, 1.9, cooling=0.4, start=4 * 3600)
+        self.assertEqual(model.samples, 0)
+
+    def test_idle_tracking_survives_missing_circuit_water(self):
         model = Model(emitter=30)
         previous = {"time": 0, "indoor": 22, "outdoor": 5, "water": None,
                     "eligible": True, "floor_heating_active": False}
         model.observe(previous, dict(previous, time=300, indoor=21.99), eligible=True)
-        self.assertEqual(model.samples, 1)
+        self.assertEqual(len(model.window), 1)
         self.assertGreater(model.emitter, 29)
 
     def test_floor_response_time_changes_stored_heat_release(self):

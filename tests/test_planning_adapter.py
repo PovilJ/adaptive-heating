@@ -84,7 +84,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.now = self.now.replace(hour=22)
         self.refresh_inputs(indoor=22.8, outdoor=-30)
         await self.make_controller()
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         await self.controller.async_mode("automatic")
         self.assertEqual(self.controller.planner_data["phase"], "coast")
         self.assertEqual(self.controller.data["proposed"], 25)
@@ -94,7 +94,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.now = self.now.replace(hour=22)
         self.refresh_inputs(indoor=21.3, outdoor=-30)
         await self.make_controller()
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         self.controller.room_history = [(self.now - timedelta(minutes=30 - 5 * i), 21.9 - .1 * i) for i in range(7)]
         await self.controller.async_request_refresh()
         self.assertEqual(self.controller.planner_data["phase"], "recovery")
@@ -106,7 +106,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.refresh_inputs(indoor=22.8, outdoor=-30)
         self.config["protection_entity"] = "sensor.bedroom"
         await self.make_controller()
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         for reading in ("unavailable", 20.1):
             self.set_state("sensor.bedroom", reading, unit_of_measurement="°C")
             await self.controller.async_request_refresh()
@@ -119,7 +119,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.refresh_inputs(indoor=22.8, outdoor=-30)
         attrs = self.states["climate.living"].attributes
         self.set_state("climate.living", "heat", **attrs)
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         self.controller.model.samples = 40
         self.controller.previous = dict(time=(self.now - timedelta(minutes=5)).timestamp(),
             indoor=22.79, outdoor=-30, water=30, eligible=True)
@@ -175,7 +175,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(call[0] == "climate" for call in self.calls))
 
     async def test_mapping_changes_reset_both_models_and_restart_is_observe(self):
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         self.controller.model.samples = 40
         await self.controller.async_save()
         await self.make_controller()
@@ -231,7 +231,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.settings.target, 22)
 
     async def test_changed_coast_water_invalidates_only_cooldown_calibration(self):
-        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=4)
+        self.controller.cooldown = adapter.CooldownModel(loss=.002, samples=40, hours=8)
         self.controller.model.samples = 40
         await self.controller.async_save()
         self.entry.options = {"minimum_water": 20}
@@ -262,7 +262,7 @@ class PlanningBoundary(unittest.IsolatedAsyncioTestCase):
             self.controller.planning_inputs(self.now, self.controller.snapshot(self.now))
         self.assertEqual(self.controller.cooldown.samples, 0)
         start = self.now
-        for i in range(40):
+        for i in range(100):
             self.now = start + timedelta(minutes=5 * i)
             self.set_state("sensor.room", 22.5 - i * .015, unit_of_measurement="°C")
             self.set_state("weather.house", "cloudy", temperature=-30, temperature_unit="°C")

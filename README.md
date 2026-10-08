@@ -268,9 +268,9 @@ observations have been collected. Model fitting uses valid room/outdoor readings
 and known floor-heating activity across heating and cooling intervals. Hot-water
 and defrost pause floor commands while the floor's residual heat continues to be
 observed. AC operation and settling exclude affected learning; invalid data and
-abrupt unexplained residuals cannot establish a fit. Sunshine labels do not turn
-off this learning, but the fitted loss remains empirical: unknown solar/internal
-gains can bias it. Predictions include the water ramp before slow floor response.
+daylight intervals cannot establish a fit. Learning compares the room with itself
+2–3 hours earlier at night in small capped steps, so it takes nights, not hours.
+The fitted loss remains empirical: internal gains can bias it. Predictions include the water ramp before slow floor response.
 
 Ordinary forecast preparation also works while the model learns. A sustained cold
 drop within the floor-response and water-ramp lead raises the weather curve;

@@ -82,7 +82,7 @@ class ColdNightPlanning(unittest.TestCase):
         self.assertFalse(result.ac_requested)
 
     def test_sufficient_existing_reserve_does_not_request_extra_heating(self):
-        slow = CooldownModel(loss=0.001, samples=20, hours=4)
+        slow = CooldownModel(loss=0.001, samples=20, hours=8)
         result = self.plan(indoor=22.8, outdoor=-30, model=slow)
         self.assertTrue(result.diagnostics["reserve_sufficient"])
         self.assertEqual(result.phase, "scheduled")
@@ -131,7 +131,7 @@ class ColdNightPlanning(unittest.TestCase):
         self.assertEqual(long_ramp.diagnostics["effective_recovery_lead_hours"], 7)
 
     def test_seven_and_half_hour_recovery_crosses_deadline_in_elapsed_time(self):
-        slow = CooldownModel(loss=0.001, samples=20, hours=4)
+        slow = CooldownModel(loss=0.001, samples=20, hours=8)
         vilnius = ZoneInfo("Europe/Vilnius")
         deadlines = (
             datetime(2026, 1, 16, 1, 30, tzinfo=timezone.utc),
@@ -169,7 +169,7 @@ class ColdNightPlanning(unittest.TestCase):
 
     def test_measured_rapid_cooling_overrides_slow_learned_behavior(self):
         now = self.now.replace(hour=23)
-        slow = CooldownModel(loss=0.001, samples=20, hours=4)
+        slow = CooldownModel(loss=0.001, samples=20, hours=8)
         normal = self.plan(now, model=slow, outdoor=-30)
         rapid = self.plan(now, model=slow, outdoor=-30, measured_cooling_rate=0.9)
         self.assertEqual(normal.phase, "coast")
@@ -210,7 +210,7 @@ class ColdNightPlanning(unittest.TestCase):
 
     def test_sunny_delay_cannot_use_forecasts_beyond_the_24_hour_horizon(self):
         points = forecast(self.now, hours=36, condition="sunny")
-        slow = CooldownModel(loss=0.001, samples=20, hours=4)
+        slow = CooldownModel(loss=0.001, samples=20, hours=8)
         result = self.plan(outdoor=-30, forecasts=points, model=slow, recovery_ramp_hours=4.5)
         # At 15:00, tomorrow's 09:00 + 7.5-hour response is outside the
         # supported horizon even when the provider supplies 36 hours of data.
@@ -282,8 +282,10 @@ class EmpiricalCooldown(unittest.TestCase):
 
     def test_eligible_night_cooldown_learns_and_persists_without_previous_sample(self):
         model = CooldownModel()
-        for i in range(25):
+        for i in range(37):
             model.observe(self.now + timedelta(minutes=10 * i), 22 - i * 0.025, -28, eligible=True)
+        self.assertEqual(model.samples, 6)
+        self.assertFalse(CooldownModel(samples=5, hours=5).calibrated)
         self.assertTrue(model.calibrated)
         self.assertLess(model.cooling_rate(22, -28), 0.4)
         restored = CooldownModel.restore(model.to_dict())
@@ -294,15 +296,19 @@ class EmpiricalCooldown(unittest.TestCase):
     def test_ineligible_ac_tank_daylight_or_active_heating_breaks_both_endpoints(self):
         model = CooldownModel()
         model.observe(self.now, 22, -28, eligible=True)
-        model.observe(self.now + timedelta(minutes=10), 21.9, -28, eligible=False)
-        model.observe(self.now + timedelta(minutes=20), 21.8, -28, eligible=True)
+        model.observe(self.now + timedelta(minutes=30), 21.9, -28, eligible=False)
+        model.observe(self.now + timedelta(minutes=60), 21.8, -28, eligible=True)
         self.assertEqual(model.samples, 0)
-        model.observe(self.now + timedelta(minutes=30), 21.7, -28, eligible=True)
+        # Five-minute polls inside the hour neither count nor restart the window.
+        model.observe(self.now + timedelta(minutes=65), 21.8, -28, eligible=True)
+        self.assertEqual(model.samples, 0)
+        model.observe(self.now + timedelta(minutes=120), 21.6, -28, eligible=True)
         self.assertEqual(model.samples, 1)
+        self.assertAlmostEqual(model.hours, 1)
 
     def test_gaps_invalid_readings_warming_and_sensor_jumps_are_not_learning(self):
-        for elapsed, indoor, outdoor in ((120, 21, -28), (10, math.nan, -28),
-                                         (10, 23, -28), (10, 20, -28), (10, 21.9, 21)):
+        for elapsed, indoor, outdoor in ((120, 21.8, -28), (60, math.nan, -28),
+                                         (60, 23, -28), (60, 20, -28), (60, 21.9, 21)):
             model = CooldownModel()
             model.observe(self.now, 22, outdoor, eligible=True)
             model.observe(self.now + timedelta(minutes=elapsed), indoor, outdoor, eligible=True)

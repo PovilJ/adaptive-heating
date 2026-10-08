@@ -115,7 +115,8 @@ class CooldownModel:
 
     @property
     def calibrated(self):
-        return self.samples >= 12 and self.hours >= 2 - 1e-6
+        # Hourly samples: six hours of coasting, typically two cold nights.
+        return self.samples >= 6 and self.hours >= 6 - 1e-6
 
     def observe(self, at, indoor, outdoor, *, eligible):
         """Fit only consecutive eligible endpoints; the caller owns physical gates."""
@@ -124,17 +125,22 @@ class CooldownModel:
             self._previous = None
             return
         previous = self._previous
-        self._previous = (at.timestamp(), indoor, outdoor)
         if previous is None:
+            self._previous = (at.timestamp(), indoor, outdoor)
             return
         dt = (at.timestamp() - previous[0]) / 3600
-        if not 5 / 60 <= dt <= 1:
+        # Cooling is about 0.2 °C/h and the sensor reports 0.1 °C steps, so a
+        # shorter interval is mostly rounding. Compare with the room an hour ago.
+        if 0 <= dt < 55 / 60:
+            return
+        self._previous = (at.timestamp(), indoor, outdoor)
+        if not 0 < dt <= 1.25:
             return
         difference = (previous[1] + indoor - previous[2] - outdoor) / 2
         rate = (previous[1] - indoor) / dt
         # Warming/disturbances, near-zero air differences, and abrupt sensor
         # jumps cannot establish the low-water cooldown coefficient.
-        if difference < 5 or not 0 <= rate <= 2:
+        if difference < 5 or not 0 <= rate <= 1:
             return
         observed = rate / difference
         self.error = 0.9 * self.error + 0.1 * abs(rate - self.loss * difference)
