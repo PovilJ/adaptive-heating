@@ -217,6 +217,11 @@ Adaptive Heating has not sent a water target since this restart.
         ]),
     ]
 
+    overview_sections[0]["cards"][0]["badges"] = [{
+        "type": "entity", "entity": e["operating"], "show_state": True,
+        "icon": "mdi:heat-pump-outline", "tap_action": {"action": "more-info"},
+    }]
+
     # Every new mapping is optional, including the status entities. Older
     # installations keep their existing dashboard and never reference new IDs.
     planner_summary = markdown("""<ha-icon icon="mdi:weather-night"></ha-icon> **COLD-NIGHT PLAN**

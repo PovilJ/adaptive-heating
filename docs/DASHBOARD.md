@@ -22,6 +22,13 @@ not depend on that styling resource. No additional frontend resource was install
   efficiency sensors, manual water adjustment, settings, and the installed HACS update entity.
 
 The overview's Room target and Control mode belong to the new integration.
+The existing **Room comfort** heading has a heat-pump activity badge at its top
+right, using the mapped operating sensor independently of the controller's last
+evaluation. The first house uses `versati_117_unit_status`; the badge shows its
+reported HEAT, HOT WATER, OFF or other state. Tap it for the sensor details.
+The badge was saved and re-read live on October 8 with activity HEAT; the owner
+requested this position after an initial line beneath the temperature. No
+additional card, controller reload or restart was needed.
 Evaluate now uses the new integration button. It evaluates without writing in
 Observe; in Automatic it can send a command only when the existing guards and
 command interval permit it.
