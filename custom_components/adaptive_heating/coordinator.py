@@ -596,6 +596,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
             result["commanded"] = self.last_commanded
             self.events = ([{k: result[k] for k in ("checked_at", "status", "reason", "proposed", "limited", "commanded", "actual", "planner_status")}] + self.events)[:20]
             await self.async_save()
+            # While paused (sensor silent after a restart, hot water, defrost) look again soon,
+            # so control resumes within minutes instead of at the next half hour.
+            self.update_interval = timedelta(minutes=2 if result["status"] == "paused" else self.settings.control_minutes)
             return result
 
     def location(self):

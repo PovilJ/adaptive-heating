@@ -179,3 +179,13 @@ return sensor; compare the two in the live data.
 - With 30-minute evaluation the 0.3.x cooling trend, stalled-recovery boost,
   `solar_wait` and cooldown learning receive no data and are dormant.
 - The dashboard does not chart the plan yet.
+
+## 0.4.3: a paused controller looks again in two minutes
+
+After a restart the Zigbee room thermometer is unknown until its next report.
+With one evaluation per half hour, the first check found no room temperature
+and the status read "Indoor temperature unavailable" for up to 30 minutes
+although the sensor had returned within six. While the status is paused the
+coordinator now re-evaluates every 2 minutes; otherwise every control interval.
+On October 10 the owner updated to 0.4.2 through HACS himself (HACS reported
+`444c875` installed and latest), so HACS updates do work from the HA UI.

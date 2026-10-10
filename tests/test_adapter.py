@@ -128,6 +128,15 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_request_refresh()
         self.assertIn("Weather compensation", self.controller.data["reason"])
 
+    async def test_paused_controller_looks_again_within_minutes(self):
+        self.set_state("sensor.room", "unavailable")
+        await self.controller.async_request_refresh()
+        self.assertEqual(self.controller.data["status"], "paused")
+        self.assertEqual(self.controller.update_interval, timedelta(minutes=2))
+        self.set_state("sensor.room", 21.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.assertEqual(self.controller.update_interval, timedelta(minutes=30))
+
     def falling_history(self, start=21.9, end=21.5):
         self.controller.room_history = [(self.now - timedelta(minutes=30 - 5 * i),
             start + (end - start) * i / 6) for i in range(7)]
