@@ -637,12 +637,16 @@ class HeatingCoordinator(DataUpdateCoordinator):
         plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
         self.plan_seed = plan.levels
         boost = self.guard.update(snapshot["indoor"], steps[0].floor)
-        water = min(comfort.maximum_water, plan.water + boost)
+        wants_heat = boost > 0 or self.house.heat_kw(plan.water, self.estimate.slab) > 0
+        held = mpc.keep_running(plan.water + boost, wants_heat, self.reading("inlet_entity", now))
+        water = min(comfort.maximum_water, held)
         day = plan.rooms[:48]
         reason = (f"Predictive plan: {water:.0f} °C water now; room {min(day):.1f}–{max(day):.1f} °C "
                   f"over 24 h for about {plan.energy_kwh * 48 / len(plan.rooms):.1f} kWh")
         if boost:
             reason += f"; +{boost:.0f} °C because the room is under its band"
+        if held > plan.water + boost:
+            reason += "; held above the return water so the compressor keeps running"
         hourly = [{"at": (now + timedelta(hours=i / 2 + 0.5)).isoformat(timespec="minutes"),
                    "water": plan.waters[i], "room": round(plan.rooms[i], 2), "floor": steps[i].floor}
                   for i in range(1, 48, 2)]

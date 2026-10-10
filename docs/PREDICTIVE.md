@@ -147,6 +147,26 @@ clamped to ±0.05 °C/h, and the stored estimate was reset. The Guard remains th
 fast defence against a wrong model. Lesson: check the first live plan, not only
 replays — the replay starts from a state consistent with the model.
 
+## 0.4.2, same day: the compressor cannot trickle
+
+The owner pointed out that a setpoint within about 1 °C of the return water
+stops the compressor, and that the PyScript lowered water gently and kept it
+above the return while heat was still wanted. 0.4.1 ignored this: its first
+confirmed plan asked for 26–27 °C overnight, which the model counted as 0.4–1 kW
+but which the real unit would have delivered as nothing.
+
+- `House.heat_kw` now returns zero below half the minimum output, so the plan
+  chooses real runs or none.
+- `mpc.keep_running`: when the first block wants heat, the commanded setpoint is
+  at least return water + 1.5 °C (rounded up). When no heat is wanted the
+  setpoint is left low so the compressor does stop.
+
+Replays with the stricter house: 4.7 / 38.8 / 6.6 kWh/day (October, cold spell,
+spring) against 5.2 / 47.1 / 8.4 for the PyScript; compressor starts rise to
+4–6 per day in mild weather, similar to the PyScript's 4–8 on the same house.
+The emitter's `dead` band is still measured from the modelled slab, not from the
+return sensor; compare the two in the live data.
+
 ## Known limits
 
 - Model values are code defaults for one house, not learned online. Only the

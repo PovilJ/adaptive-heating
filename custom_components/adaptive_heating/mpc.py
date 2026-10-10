@@ -49,7 +49,10 @@ class House:
         return min(7.0, max(1.5, self.cop_eta * (water + 273.15) / max(5.0, water - outdoor + self.cop_lift)))
 
     def heat_kw(self, water: float, slab: float) -> float:
-        return min(self.q_max, max(0.0, self.emit * (water - slab - self.dead)))
+        """Average heat for this setpoint. A setpoint barely above the return water stops the compressor:
+        it cannot run at a trickle, so less than half its minimum output counts as nothing."""
+        heat = self.emit * (water - slab - self.dead)
+        return 0.0 if heat < 0.5 * self.q_min else min(self.q_max, heat)
 
     def step(self, state: tuple, heat_kw: float, outdoor: float, sun: tuple, bias: float = 0.0,
              hours: float = STEP_HOURS) -> tuple:
@@ -189,6 +192,7 @@ def simulate(house: House, comfort: Comfort, steps: list[Step], waters: list[flo
         elif warm > 0:
             cost += comfort.warm_weight * warm * warm * STEP_HOURS
         cost += 0.01 * abs(water - previous)  # no pointless setpoint chatter
+        cost += 0.001 * (water - comfort.minimum_water)  # among setpoints that deliver nothing, the lowest
         previous = water
     return cost, path, energy
 
@@ -299,3 +303,13 @@ class Guard:
         elif room >= floor:
             self.boost = max(0.0, self.boost - 1.0)
         return self.boost
+
+
+def keep_running(water: float, wants_heat: bool, return_water: float | None, margin: float = 1.5) -> float:
+    """A plan that wants heat must leave the setpoint clear of the return water, or the compressor stops.
+
+    When no heat is wanted the setpoint is left alone so the compressor does stop.
+    """
+    if not wants_heat or return_water is None:
+        return water
+    return max(water, math.ceil(return_water + margin))

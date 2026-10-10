@@ -38,6 +38,15 @@ class HouseModel(unittest.TestCase):
         self.assertEqual(house.heat_kw(25, 24), 0)
         self.assertGreater(house.heat_kw(31, 24), 3)
 
+    def test_compressor_cannot_trickle_and_wanted_heat_stays_clear_of_the_return_water(self):
+        house = mpc.House()
+        self.assertEqual(house.heat_kw(27, 24), 0)       # under half of minimum output: it would just stop
+        self.assertGreater(house.heat_kw(28, 24), 1.5)
+        self.assertEqual(mpc.keep_running(28, True, 27.6), 30)
+        self.assertEqual(mpc.keep_running(31, True, 27.6), 31)
+        self.assertEqual(mpc.keep_running(25, False, 27.6), 25)  # no heat wanted: let it stop
+        self.assertEqual(mpc.keep_running(28, True, None), 28)
+
 
 class Planning(unittest.TestCase):
     def setUp(self):
