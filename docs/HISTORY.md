@@ -333,3 +333,22 @@ fitted house rank the planner below the PyScript and the 0.3.2 curve on
 electricity in mild, spring and −22 °C weather; this is simulation, not a
 measured saving. An unpublished 0.3.3 (interval and limiter fix only) was
 superseded before installation. Live installation status is recorded below.
+
+### October 10 authorized 0.4.0 installation
+
+The owner asked to push, update the installed package and restart for a live
+trial. Commit `4c56599` was pushed to `main`. HACS still reported `cb33aec` as
+both installed and latest after a refresh and its `update.install` returned
+HTTP 500, so the eight changed component files were written through the File
+editor API and read back identical to the repository. HA 2026.9.3 restarted
+(the proxy answered 502 to the restart call itself); the integration reports
+0.4.0. Options saved and read back: predictive on, curve offset 0.5, stale
+limit 360 min, rise 6 / fall 10 °C per hour, night floor 21.5 °C, night 22:00,
+warm by 07:00. Modes restored to main Automatic, tank Observe, AC Off; room
+target unchanged at 22.5 °C. HACS's own version record remains stale.
+
+For the first hour after any restart the AC settling window keeps the planner
+on the fallback curve; the first evaluation proposed minimum water for a
+23.7 °C room. Backups are in the ignored `.local/deployment-0.4.0/`; the
+installer is `.local/install_040.py` and `.local/check_040.py` reads the live
+plan. Field results are pending the owner's trial.
