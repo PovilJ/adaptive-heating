@@ -1,7 +1,7 @@
 """Shared settings. No installation-specific entity IDs belong here."""
 
 DOMAIN = "adaptive_heating"
-VERSION = "0.3.2"
+VERSION = "0.4.0"
 MIN_HA_VERSION = "2026.7.0"
 REPOSITORY = "PovilJ/adaptive-heating"
 MODES = ["off", "observe", "automatic"]
@@ -27,6 +27,7 @@ DEFAULTS = {
     "surplus_watts": 1000.0,
     "battery_ready_soc": 95.0,
     "preheat_degrees": 0.3,
+    "predictive": True,
 }
 
 REQUIRED_ENTITIES = {

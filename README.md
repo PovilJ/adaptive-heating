@@ -17,6 +17,10 @@ A monitored tank cycle, representative heating/AC operation and measured
 comfort/energy comparisons remain field-validation steps. No numbered GitHub
 release is published by this installation.
 
+
+Since 0.4.0 the water temperature is chosen by a predictive planner that simulates
+the house 36 hours ahead; see [docs/PREDICTIVE.md](docs/PREDICTIVE.md).
+
 ## Origins and project status
 
 This is a rewrite of the original house-specific PyScript heating controller into

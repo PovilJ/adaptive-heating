@@ -109,6 +109,25 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.writes(), [])
         self.assertEqual(self.controller.mode, "observe")
 
+    async def test_predictive_plan_replaces_the_curve_when_location_and_forecast_exist(self):
+        self.hass.config = types.SimpleNamespace(latitude=54.7, longitude=25.3)
+        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
+        self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
+        self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
+        self.controller.forecast_checked = self.now
+        await self.controller.async_request_refresh()
+        self.now += timedelta(minutes=30)
+        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.assertIn("Predictive plan", self.controller.data["reason"])
+        self.assertEqual(self.controller.data["proposed"], self.controller.settings.minimum_water)
+        self.assertEqual(len(self.controller.data["plan"]), 24)
+        self.controller.config["predictive"] = False
+        self.now += timedelta(minutes=30)
+        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.assertIn("Weather compensation", self.controller.data["reason"])
+
     def falling_history(self, start=21.9, end=21.5):
         self.controller.room_history = [(self.now - timedelta(minutes=30 - 5 * i),
             start + (end - start) * i / 6) for i in range(7)]

@@ -94,7 +94,7 @@ future temperatures.
 
 Heating enablement and compressor activity are distinct. An optional mode entity
 confirms heating remains enabled while the activity sensor reports idle. Activity
-and defrost events capture short floor-heating cycles between five-minute polls.
+and defrost events capture short floor-heating cycles between evaluations.
 The floor state follows measured circuit water while charging and relaxes toward
 room temperature over hours when idle or heating the tank. It is never instantly
 set to room temperature just because the compressor stops. Both heating and idle

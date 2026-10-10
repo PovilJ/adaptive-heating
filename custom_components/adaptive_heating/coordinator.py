@@ -21,6 +21,7 @@ from .disinfection_controller import DisinfectionController
 from .ac_controller import ACController, DEFAULTS as AC_DEFAULTS
 from .engine import Energy, Model, Recovery, Settings, clamp, cooling_trend, decide, finite, limited_output, power_watts, surplus_available, temperature
 from .planner import DEFAULTS as PLAN_DEFAULTS, CooldownModel, ForecastPoint, PlannerSettings, decide_plan
+from . import mpc
 
 _LOGGER = logging.getLogger(__name__)
 # Revision 3: night-window learning. Older stored counts are not comparable.
@@ -43,6 +44,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.releases = releases
         self.config = DEFAULTS | DHW_DEFAULTS | PLAN_DEFAULTS | AC_DEFAULTS | dict(entry.data) | dict(entry.options)
         self.settings = Settings(**{k: self.config[k] for k in Settings.__dataclass_fields__ if k in self.config})
+        # Like the PyScript: one evaluation and one command opportunity per control interval.
+        self.update_interval = timedelta(minutes=self.settings.control_minutes)
         self.planner_settings = PlannerSettings(**{k: self.config[k] for k in PlannerSettings.__dataclass_fields__})
         self.cooldown = CooldownModel()
         self.dark = False
@@ -70,6 +73,11 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.last_cycle = None
         self.forecast_checked = None
         self.forecast_cache = []
+        self.forecast_rows = []
+        self.house = mpc.House()
+        self.estimate = mpc.Estimate()
+        self.guard = mpc.Guard()
+        self.plan_seed = None
         self.events = []
         self.started = dt_util.utcnow()
         self.disinfection = DisinfectionController(self)
@@ -103,6 +111,10 @@ class HeatingCoordinator(DataUpdateCoordinator):
         # Earlier revisions counted five-minute fits; those counts and errors do
         # not mean the same thing, so start again from the PyScript's values.
         self.legacy_seed_pending = data.get("model_revision") != MODEL_REVISION
+        try:
+            self.estimate = mpc.Estimate(**data.get("estimate", {}))
+        except TypeError:
+            self.estimate = mpc.Estimate()
         # Observe on every restart/reconfiguration, regardless of stored mode.
         await self.disinfection.async_load()
         await self.ac.async_load()
@@ -111,7 +123,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         await self.store.async_save({"identity": self.identity(), "model_revision": MODEL_REVISION,
                                     "model": asdict(self.model), "target": self.settings.target,
                                     "configured_target": self.config["target"], "cooldown": self.cooldown.to_dict(),
-                                    "cooldown_regime": self.cooldown_regime()})
+                                    "cooldown_regime": self.cooldown_regime(), "estimate": asdict(self.estimate)})
 
     def seed_from_legacy(self):
         """Start once from the loss/gain the original PyScript learned, if its helpers remain."""
@@ -284,6 +296,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         if self.forecast_checked is None or (now - self.forecast_checked).total_seconds() >= 1800:
             self.forecast_checked = now
             self.forecast_cache = []
+            self.forecast_rows = []
             self.forecast_details = []
             try:
                 async with asyncio.timeout(10):
@@ -297,6 +310,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
                     value = temperature(row.get("temperature"), unit)
                     if when is not None and when.tzinfo is not None and value is not None and -70 <= value <= 60:
                         self.forecast_cache.append((when, value))
+                        self.forecast_rows.append((when, value, finite(row.get("cloud_coverage"))))
                         self.forecast_details.append(ForecastPoint(when, value, row.get("condition")))
             except (HomeAssistantError, TimeoutError, ValueError, TypeError, AttributeError):
                 _LOGGER.debug("Hourly weather forecast unavailable; using heating curve")
@@ -502,6 +516,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
             else:
                 self.previous = None
                 self.model.emitter = None
+            self.observe_house(now, snapshot)
+            result.update(floor_estimate=self.estimate.slab, sun_glow=self.estimate.glow, model_bias=self.estimate.bias,
+                          predicted_room=self.estimate.predicted)
             result.update(indoor=snapshot["indoor"], outdoor=snapshot["outdoor"], actual=snapshot["output"],
                 heating_enabled=snapshot["heating_enabled"], compressor_active=snapshot["compressor_active"],
                 floor_heating_active=snapshot["floor_heating_active"], learning_excluded_by_ac=ac_active,
@@ -556,6 +573,10 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 if self.planner_settings.cold_night_enabled and snapshot["indoor"] >= self.planner_settings.preheat_ceiling:
                     decision = replace(decision, proposed=self.settings.minimum_water, predicted_minimum=None,
                                        reason="Room reached the preheat ceiling; reducing floor heat within water limits")
+                predictive = None if ac_active else await self.predictive_plan(now, snapshot)
+                if predictive is not None:
+                    decision = replace(decision, proposed=predictive[0], predicted_minimum=predictive[1], reason=predictive[2])
+                    result.update(plan=predictive[3], plan_energy_kwh=predictive[4])
                 result.update(proposed=decision.proposed, prediction=decision.predicted_minimum, reason=decision.reason)
                 result.update(planning_outdoor=decision.planning_outdoor,
                               cooling_compensation=decision.cooling_compensation)
@@ -565,7 +586,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
                     result.update(status="paused", reason="Setpoint or device limits invalid; check output entity and water limits")
                 elif self.mode == "automatic":
                     # Evaluation buttons cannot bypass the time-based command limits.
-                    due = self.last_cycle is None or (now - self.last_cycle).total_seconds() >= self.settings.control_minutes * 60
+                    # A minute of slack: timer jitter must not postpone a command by a whole interval.
+                    due = self.last_cycle is None or (now - self.last_cycle).total_seconds() >= self.settings.control_minutes * 60 - 60
                     if due:
                         self.last_cycle = now
                         await self.apply(limited, snapshot["output"], result)
@@ -575,6 +597,56 @@ class HeatingCoordinator(DataUpdateCoordinator):
             self.events = ([{k: result[k] for k in ("checked_at", "status", "reason", "proposed", "limited", "commanded", "actual", "planner_status")}] + self.events)[:20]
             await self.async_save()
             return result
+
+    def location(self):
+        config = getattr(self.hass, "config", None)
+        place = (finite(getattr(config, "latitude", None)), finite(getattr(config, "longitude", None)))
+        return None if None in place else place
+
+    def observe_house(self, now, snapshot):
+        """Keep the planner's slab and sun estimates current, including while control is paused."""
+        place = self.location()
+        if place is None or not snapshot["thermal_valid"]:
+            return
+        cloud = next((c for t, _, c in sorted(self.forecast_rows) if t >= now - timedelta(hours=1)), None)
+        duty = snapshot["compressor_on_fraction"]
+        if duty is None:
+            duty = 1.0 if snapshot["floor_heating_active"] else 0.0
+        self.estimate.update(self.house, now.timestamp(), snapshot["indoor"], snapshot["outdoor"],
+                             snapshot["output"], duty, mpc.sunshine(now, *place, cloud))
+
+    async def predictive_plan(self, now, snapshot):
+        """Cheapest water schedule that keeps the room in its band; None falls back to the heating curve."""
+        place = self.location()
+        rows = [row for row in self.forecast_rows if row[0] >= now - timedelta(hours=1)]
+        if (not self.config.get("predictive", True) or place is None or self.estimate.slab is None
+                or self.estimate.room is None or len(rows) < 12):
+            return None
+        state = self.hass.states.get(self.config["output_entity"])
+        step = finite(state.attributes.get("step")) if state else None
+        comfort = mpc.Comfort(target=self.settings.target,
+            night_floor=min(self.settings.target, self.planner_settings.night_minimum),
+            night_start=int(self.planner_settings.quiet_start_hour), warm_by=int(self.planner_settings.morning_hour),
+            minimum_water=self.settings.minimum_water, maximum_water=self.settings.maximum_water,
+            water_step=step if step and 0.5 <= step <= 2 else 1.0)
+        offset = dt_util.as_local(now).utcoffset()
+        steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0)
+        arguments = (self.house, comfort, steps, self.estimate.state(self.house), self.estimate.bias,
+                     bool(snapshot["floor_heating_active"]), self.plan_seed)
+        job = getattr(self.hass, "async_add_executor_job", None)
+        plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
+        self.plan_seed = plan.levels
+        boost = self.guard.update(snapshot["indoor"], steps[0].floor)
+        water = min(comfort.maximum_water, plan.water + boost)
+        day = plan.rooms[:48]
+        reason = (f"Predictive plan: {water:.0f} °C water now; room {min(day):.1f}–{max(day):.1f} °C "
+                  f"over 24 h for about {plan.energy_kwh * 48 / len(plan.rooms):.1f} kWh")
+        if boost:
+            reason += f"; +{boost:.0f} °C because the room is under its band"
+        hourly = [{"at": (now + timedelta(hours=i / 2 + 0.5)).isoformat(timespec="minutes"),
+                   "water": plan.waters[i], "room": round(plan.rooms[i], 2), "floor": steps[i].floor}
+                  for i in range(1, 48, 2)]
+        return water, round(min(day), 2), reason, hourly, round(plan.energy_kwh * 48 / len(plan.rooms), 2)
 
     def output_limit(self, proposed, current, now):
         state = self.hass.states.get(self.config["output_entity"])
@@ -589,7 +661,10 @@ class HeatingCoordinator(DataUpdateCoordinator):
         if unit == "°F":
             step /= 1.8
         elapsed = (now - (self.last_command_time or self.started)).total_seconds() / 3600
-        elapsed = min(elapsed, self.settings.control_minutes / 60)
+        interval = self.settings.control_minutes / 60
+        # The command is stamped after the service call, so the next cycle is a
+        # moment short of a full interval; that must still allow a full step.
+        elapsed = interval if elapsed >= interval - 1 / 60 else elapsed
         return limited_output(proposed, current, max(lo, self.settings.minimum_water),
                               min(hi, self.settings.maximum_water), step, lo, elapsed,
                               self.settings.rise_per_hour, self.settings.fall_per_hour)

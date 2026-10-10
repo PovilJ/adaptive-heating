@@ -83,5 +83,11 @@ class HeatingSensor(HeatingEntity, SensorEntity):
                     "forecast_planning_outdoor_celsius": (self.coordinator.data or {}).get("planning_outdoor"),
                     "water_cooling_compensation_celsius": (self.coordinator.data or {}).get("cooling_compensation"),
                     "water_recovery_assistance_celsius": (self.coordinator.data or {}).get("recovery_boost"),
+                    "plan": (self.coordinator.data or {}).get("plan"),
+                    "plan_energy_kwh_24h": (self.coordinator.data or {}).get("plan_energy_kwh"),
+                    "estimated_slab_celsius": (self.coordinator.data or {}).get("floor_estimate"),
+                    "estimated_sun_glow_celsius": (self.coordinator.data or {}).get("sun_glow"),
+                    "model_bias_celsius_per_hour": (self.coordinator.data or {}).get("model_bias"),
+                    "predicted_room_last_cycle": (self.coordinator.data or {}).get("predicted_room"),
                     "restart_required": self.coordinator.releases.restart_pending}
         return None

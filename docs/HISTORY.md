@@ -313,3 +313,23 @@ fit every 30 minutes, loss fitted with the floor off and gain with it heating,
 coefficients start once from the PyScript helpers (0.01567 / 0.03318 in the
 first house). Night-cooldown samples now span an hour and calibration needs six
 hours. 209 tests pass on HA 2026.7.4. No field result is claimed.
+
+### October 10 predictive planner — 0.4.0
+
+After two days of Automatic on 0.3.2 the room sat above its 22.5 °C target 88 %
+of the time once reached, with water about 2 °C hotter than the archived
+PyScript requests for the same readings. The owner asked for a controller better
+than both. Version 0.4.0 adds a model-predictive planner: a three-store house
+model fitted to January–May statistics and the October cold start, a 36-hour
+plan over forecast temperature, cloud and sun position, a comfort band with an
+optional night floor, and a guard for model error. Evaluation and command now
+share the 30-minute control interval, as in the PyScript, and a command stamped
+just after its cycle no longer loses a whole step at the next one. Design, fit,
+replay results and the follow-up checklist are in [PREDICTIVE.md](PREDICTIVE.md).
+
+219 tests pass on Python 3.14.7 / HA 2026.7.4, including nine planner tests and
+one adapter test of the predictive path and its fallback. Replays against the
+fitted house rank the planner below the PyScript and the 0.3.2 curve on
+electricity in mild, spring and −22 °C weather; this is simulation, not a
+measured saving. An unpublished 0.3.3 (interval and limiter fix only) was
+superseded before installation. Live installation status is recorded below.
