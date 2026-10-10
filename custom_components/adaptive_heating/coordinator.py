@@ -112,7 +112,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         # not mean the same thing, so start again from the PyScript's values.
         self.legacy_seed_pending = data.get("model_revision") != MODEL_REVISION
         try:
-            self.estimate = mpc.Estimate(**data.get("estimate", {}))
+            self.estimate = mpc.Estimate(**data.get("estimate2", {}))
         except TypeError:
             self.estimate = mpc.Estimate()
         # Observe on every restart/reconfiguration, regardless of stored mode.
@@ -123,7 +123,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         await self.store.async_save({"identity": self.identity(), "model_revision": MODEL_REVISION,
                                     "model": asdict(self.model), "target": self.settings.target,
                                     "configured_target": self.config["target"], "cooldown": self.cooldown.to_dict(),
-                                    "cooldown_regime": self.cooldown_regime(), "estimate": asdict(self.estimate)})
+                                    "cooldown_regime": self.cooldown_regime(), "estimate2": asdict(self.estimate)})
 
     def seed_from_legacy(self):
         """Start once from the loss/gain the original PyScript learned, if its helpers remain."""

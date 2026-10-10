@@ -135,6 +135,18 @@ Findings worth remembering:
 5. Sunny mornings: does it hold back before the sun arrives?
 6. Refit `mpc.House` with the new days included.
 
+## 0.4.1, same day
+
+The first live plan (one hour after the 0.4.0 restart) proposed minimum water
+now but 36–38 °C through the night, 23.5 kWh for the day. Cause: the drift term
+learned at 0.2 per cycle with a ±0.3 °C/h clamp, and a daylight surprise the sun
+glow could not absorb (glow cannot be negative) went nowhere. Three cycles of
+start-up mismatch became −0.19 °C/h, about 4 kW of imaginary heat loss. Fixed:
+the remainder now corrects the slab, the drift learns at 0.02 per cycle and is
+clamped to ±0.05 °C/h, and the stored estimate was reset. The Guard remains the
+fast defence against a wrong model. Lesson: check the first live plan, not only
+replays — the replay starts from a state consistent with the model.
+
 ## Known limits
 
 - Model values are code defaults for one house, not learned online. Only the

@@ -280,8 +280,11 @@ class Estimate:
         # In daylight a surprise is mostly sun on the thermometer; in the dark it is the slab.
         sunny = sun[0] + sun[1] + sun[2] > 0.02
         self.glow = min(6.0, max(0.0, state[2] + (error if sunny else 0.0)))
-        self.slab = min(45.0, max(room - 1.0, state[0] + (0.0 if sunny else error)))
-        self.bias = min(0.3, max(-0.3, self.bias + 0.2 * error / max(hours, 0.25)))
+        # Whatever the glow cannot absorb (it cannot go negative) belongs to the slab.
+        self.slab = min(45.0, max(room - 1.0, state[0] + error - (self.glow - state[2])))
+        # The drift term is for errors that persist for days. Learned quickly, a start-up
+        # mismatch became 4 kW of imaginary heat loss and a night of 38 °C water.
+        self.bias = min(0.05, max(-0.05, self.bias + 0.02 * error / max(hours, 0.25)))
         self.room, self.at, self.predicted = room, now, predicted
 
 

@@ -81,6 +81,14 @@ class Planning(unittest.TestCase):
         self.assertGreater(day.glow, night.glow)
         self.assertAlmostEqual(self.house.room(night.state(self.house)), 23.0, places=6)
 
+    def test_startup_mismatch_does_not_become_a_large_permanent_drift(self):
+        estimate, noon = mpc.Estimate(), datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)
+        for cycle in range(6):  # a room that keeps reading cooler than the model expects, in daylight
+            estimate.update(self.house, noon.timestamp() + 1800 * cycle, 23.7 - 0.05 * cycle, 9, None, 0,
+                            mpc.sunshine(noon, *PLACE, 90))
+        self.assertLessEqual(abs(estimate.bias), 0.05)
+        self.assertAlmostEqual(estimate.predicted, 23.45, delta=0.3)
+
 
 if __name__ == "__main__":
     unittest.main()
