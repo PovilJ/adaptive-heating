@@ -116,12 +116,12 @@ class Comfort:
     night_start: int = 22       # local hour
     warm_by: int = 7            # local hour
     day_margin: float = 0.0     # room may sit this far under target by day
-    headroom: float = 0.5       # free heat storage above target
+    headroom: float = 0.3       # free heat storage above target
     minimum_water: float = 25.0
     maximum_water: float = 40.0
     water_step: float = 1.0
-    cold_weight: float = 20.0   # kWh-equivalents per °C² hour below the band
-    warm_weight: float = 1.5    # per °C² hour above it
+    cold_weight: float = 60.0   # kWh-equivalents per °C² hour below the band: the floor is firm
+    warm_weight: float = 4.0    # per °C hour above it; at the old 1.5 per °C² heating a room 1 °C over target was nearly free
     start_cost: float = 0.15    # kWh-equivalent per compressor start
     cycling_loss: float = 0.15  # extra electricity share when below minimum output
     sun_discount: float = 0.3   # electricity is this much cheaper under full sun (own PV)
@@ -190,7 +190,8 @@ def simulate(house: House, comfort: Comfort, steps: list[Step], waters: list[flo
         if cold > 0:
             cost += comfort.cold_weight * cold * cold * STEP_HOURS
         elif warm > 0:
-            cost += comfort.warm_weight * warm * warm * STEP_HOURS
+            # Linear, not squared: squared, a sunny afternoon nobody can prevent outweighed a cold morning.
+            cost += comfort.warm_weight * warm * STEP_HOURS
         cost += 0.01 * abs(water - previous)  # no pointless setpoint chatter
         cost += 0.001 * (water - comfort.minimum_water)  # among setpoints that deliver nothing, the lowest
         previous = water
@@ -281,10 +282,12 @@ class Estimate:
             state = house.step(state, heat, outdoor, sun, self.bias, hours / parts)
         predicted = house.room(state)
         error = room - predicted
-        # In daylight a surprise is mostly sun on the thermometer; in the dark it is the slab.
-        sunny = sun[0] + sun[1] + sun[2] > 0.02
-        self.glow = min(6.0, max(0.0, state[2] + (error if sunny else 0.0)))
-        # Whatever the glow cannot absorb (it cannot go negative) belongs to the slab.
+        # The sun is blamed for at most half as much again as it should have added under this sky.
+        # On an overcast day the whole warm surprise used to become glow, which fades in the plan: the
+        # room read 1 °C over target while the planner believed the house was at target and kept heating.
+        drive = house.sun_east * sun[0] + house.sun_south * sun[1] + house.sun_west * sun[2]
+        self.glow = min(6.0, max(0.0, state[2] + min(error, 0.5 * drive * hours)))
+        # Whatever the glow cannot absorb (it cannot go negative) is heat in the slab, and it stays.
         self.slab = min(45.0, max(room - 1.0, state[0] + error - (self.glow - state[2])))
         # The drift term is for errors that persist for days. Learned quickly, a start-up
         # mismatch became 4 kW of imaginary heat loss and a night of 38 °C water.
@@ -303,6 +306,11 @@ class Guard:
         elif room >= floor:
             self.boost = max(0.0, self.boost - 1.0)
         return self.boost
+
+
+def too_warm(room: float, ceiling: float) -> bool:
+    """The measured room is a thermometer step over its band: whatever the model believes, add no heat."""
+    return room > ceiling + 0.2
 
 
 def keep_running(water: float, wants_heat: bool, return_water: float | None, margin: float = 1.5) -> float:

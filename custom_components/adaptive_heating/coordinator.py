@@ -642,13 +642,17 @@ class HeatingCoordinator(DataUpdateCoordinator):
         boost = self.guard.update(snapshot["indoor"], steps[0].floor)
         wants_heat = boost > 0 or self.house.heat_kw(plan.water, self.estimate.slab) > 0
         held = mpc.keep_running(plan.water + boost, wants_heat, self.reading("inlet_entity", now))
-        water = min(comfort.maximum_water, held)
+        # Safety net for a wrong model on the warm side, as the Guard is on the cold side.
+        warm = mpc.too_warm(snapshot["indoor"], steps[0].ceiling)
+        water = comfort.minimum_water if warm else min(comfort.maximum_water, held)
         day = plan.rooms[:48]
         reason = (f"Predictive plan: {water:.0f} °C water now; room {min(day):.1f}–{max(day):.1f} °C "
                   f"over 24 h for about {plan.energy_kwh * 48 / len(plan.rooms):.1f} kWh")
-        if boost:
+        if warm:
+            reason += "; no heat while the room is over its band"
+        elif boost:
             reason += f"; +{boost:.0f} °C because the room is under its band"
-        if held > plan.water + boost:
+        if not warm and held > plan.water + boost:
             reason += "; held above the return water so the compressor keeps running"
         hourly = [{"at": (now + timedelta(hours=i / 2 + 0.5)).isoformat(timespec="minutes"),
                    "water": plan.waters[i], "room": round(plan.rooms[i], 2), "floor": steps[i].floor}

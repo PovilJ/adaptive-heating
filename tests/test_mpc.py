@@ -79,6 +79,11 @@ class Planning(unittest.TestCase):
         self.assertEqual(guard.update(22.5, 22.5), 2)
         self.assertEqual(guard.update(22.4, 22.5), 2)  # inside the 0.2 °C sensor step: hold
 
+    def test_measured_room_a_step_over_its_band_gets_no_heat_whatever_the_model_believes(self):
+        ceiling = mpc.Comfort(target=22.1).target + mpc.Comfort().headroom
+        self.assertFalse(mpc.too_warm(22.5, ceiling))
+        self.assertTrue(mpc.too_warm(22.7, ceiling))  # 13 October: reached at 14:37, the compressor ran until 17:00
+
     def test_estimate_blames_the_slab_at_night_and_the_sun_by_day(self):
         night, day = mpc.Estimate(), mpc.Estimate()
         noon = datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)
@@ -89,6 +94,26 @@ class Planning(unittest.TestCase):
         self.assertGreater(night.slab, day.slab)
         self.assertGreater(day.glow, night.glow)
         self.assertAlmostEqual(self.house.room(night.state(self.house)), 23.0, places=6)
+
+    def test_overcast_warmth_is_heat_in_the_house_and_not_sun(self):
+        # 13 October 2026: 100 % cloud, floor heating on, room climbing 0.2 °C per cycle above the forecast.
+        cloudy, clear = mpc.Estimate(), mpc.Estimate()
+        noon = datetime(2026, 10, 13, 9, 0, tzinfo=timezone.utc)
+        for estimate, cloud in ((cloudy, 100), (clear, 0)):
+            for cycle in range(6):
+                when = noon + timedelta(minutes=30 * cycle)
+                estimate.update(self.house, when.timestamp(), 22.1 + 0.2 * cycle, 9, 29, 1.0, mpc.sunshine(when, *PLACE, cloud))
+        self.assertLess(cloudy.glow, 0.5)
+        self.assertGreater(cloudy.room - cloudy.glow, 22.6)  # the planner sees a warm house, so it stops
+        self.assertGreater(clear.glow, cloudy.glow + 0.3)
+
+    def test_plan_does_not_heat_a_room_already_over_its_band(self):
+        afternoon = MIDNIGHT + timedelta(hours=14)
+        comfort = mpc.Comfort(target=22.1)
+        state = self.house.resting(22.7, 9, slab=23.2)
+        result = mpc.plan(self.house, comfort, steps(afternoon, 9, 100, comfort), state)
+        self.assertEqual(self.house.heat_kw(result.water, state[0]), 0)
+        self.assertLess(max(result.rooms[:12]), 22.9)
 
     def test_startup_mismatch_does_not_become_a_large_permanent_drift(self):
         estimate, noon = mpc.Estimate(), datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)

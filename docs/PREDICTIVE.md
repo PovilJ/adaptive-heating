@@ -27,9 +27,10 @@ Every control interval (30 minutes, evaluation and command together):
 
 1. **Estimate** ([`mpc.Estimate`](../custom_components/adaptive_heating/mpc.py)).
    Advance a three-store model of the house with what the heat pump and sky did
-   since the last cycle, compare with the thermometer, and correct: at night the
-   surprise is attributed to the slab, in daylight to sun on the room, and a
-   persistent miss becomes a slow drift term.
+   since the last cycle, compare with the thermometer, and correct: a warm
+   surprise is attributed to sun on the room only as far as the sky allows
+   (0.4.4), the rest to the slab, and a persistent miss becomes a slow drift
+   term.
 2. **Forecast.** 36 hours of half-hour steps from the weather entity's hourly
    temperature and cloud cover, plus sun position for east, south and west walls.
 3. **Plan** (`mpc.plan`). Search water temperatures for 13 blocks (half-hours
@@ -42,7 +43,8 @@ Every control interval (30 minutes, evaluation and command together):
    1 °C of water per cycle (up to 6) until it is back. This covers a wrong model.
 
 Comfort band: target (no lower by day), `night_minimum` from `quiet_start_hour`
-to `morning_hour`, and 0.5 °C of free headroom above target for storing heat.
+to `morning_hour`, and 0.3 °C of free headroom above target for storing heat
+(0.5 °C before 0.4.4).
 
 The planner is skipped, and the old heating curve used, when `predictive` is
 off, Home Assistant has no location, fewer than 12 forecast hours exist, or AC
@@ -189,3 +191,76 @@ although the sensor had returned within six. While the status is paused the
 coordinator now re-evaluates every 2 minutes; otherwise every control interval.
 On October 10 the owner updated to 0.4.2 through HACS himself (HACS reported
 `444c875` installed and latest), so HACS updates do work from the HA UI.
+
+## 0.4.4: stop heating a room that is already warm
+
+On 13 October (100 % cloud all day, 7–11 °C outside) the compressor ran from
+13:53 to after 17:00 while the room climbed from 22.5 to 23.1 °C against a
+22.1 °C target; the owner lowered the setpoint by hand. On the 11th it had also
+run at 18:30 with the room at 23.3–23.5 °C (target 22.5).
+
+Two causes, both in `mpc.py`:
+
+- **Estimator.** In daylight every warm surprise became sun glow, and the
+  daylight test passed even under full cloud. Glow fades in the plan, so the
+  planner believed the house itself was still at 22.1 °C and would fall under
+  target without more heat. Now the glow takes at most half as much again as
+  the modelled sun delivered in that interval; the rest is slab and building
+  heat, which stays. A cold surprise still shrinks the glow first.
+- **Comfort cost.** 0.5 °C over target was free and the penalty beyond it was
+  1.5 per °C² hour, so a room 1 °C over target cost almost nothing, while a
+  dip under target cost 20. Now: 0.3 °C of headroom, 4 per °C hour above it
+  (linear), 60 per °C² hour below.
+
+- **No stop on the warm side.** The Guard covered a wrong model only when the
+  room was cold. Now a measured room more than 0.2 °C over its band
+  (target + 0.5) gets minimum water whatever the plan says (`mpc.too_warm`),
+  and the keep-running lift is not applied.
+
+A squared penalty of 10 above the band was tried first. It stopped the
+afternoon heating but, with the floor still at 20, the plan let sunny days
+begin 0.6–0.9 °C under target (07:00–09:00, 0.6–1.3 h/day in replay) to offset
+solar warmth nobody can prevent, and the Guard then heated just before the sun
+arrived. Linear above, firm below removes that.
+
+Evidence:
+
+- Planner re-run from each recorded estimator state, 10–13 October
+  (`.local/analysis-2026-10-13/replay.py`, `plans.py`): half-hours where the
+  plan wants heat with the room 0.5 °C or more over target fall from 9.5 h to
+  1.5 h from the estimator and cost alone; the stop removes the rest. On the
+  13th the plan alone still wants heat until 15:30 (room 22.7 °C); the stop
+  acts at the first cycle after 14:37, more than two hours before the owner
+  did. On the 11th the 18:00–19:00 run at 23.3–23.5 °C is not requested.
+- Replays (`scripts/backtest.py`, which now also holds the setpoint above the
+  return water as the live unit does), old → new:
+
+| Period | kWh/day | hours/day over target + 0.5 | daytime hours/day 0.3 under |
+| --- | --- | --- | --- |
+| 2–10 Oct | 4.6 → 4.7 | 11.3 → 6.8 | 0.2 → 0.0 |
+| 10–20 Mar | 6.7 → 6.9 | 13.2 → 11.6 | 0.3 → 0.0 |
+| 22 Jan–1 Feb | 39.0 → 39.6 | 3.2 → 1.1 | 0.0 → 0.3 |
+| 2–10 Oct, wrong house | 10.2 → 10.3 | 8.8 → 6.5 | 0.5 → 0.4 |
+| 10–20 Mar, wrong house | 14.6 → 15.2 | 11.3 → 10.9 | 1.9 → 1.8 |
+
+  Most remaining hours over the band are sunshine. The replay house is the
+  model, so it cannot show the electricity wasted by a wrong estimate such as
+  the 13th; no saving is claimed, and in replay electricity is level to 4 %
+  higher. To watch in frost: on clear days the stop withholds heat while the
+  sun warms the thermometer (the 0.3 h/day and +0.5 kWh/day in the January row;
+  room minimum 22.08 °C against a 22.5 °C target).
+
+Also learned from the five days of live cycles:
+
+- A joint refit including 8–13 October found a different house (weak slab
+  coupling, room reading 27 % of the slab) with the same fit error, and it
+  forecast worse from live states (6 h daytime bias −0.22 °C against −0.10).
+  `mpc.House` is unchanged.
+- Fed measured heat (electricity × COP) instead of the emitter model, the
+  estimator's 6 h forecasts are unbiased to 0.1 °C. Using the power sensor in
+  the live estimator is a candidate.
+- Return water sits 4.7 °C above the slab estimate while running and 2.8 °C
+  idle (medians).
+- Forecast cloud is a poor sunshine measure: on the 12th it said 66–100 % while
+  PV made 5 kW and the room gained 1.4 °C with the compressor off. PV as a
+  nowcast is still not used.

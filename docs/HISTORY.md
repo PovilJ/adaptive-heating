@@ -352,3 +352,16 @@ on the fallback curve; the first evaluation proposed minimum water for a
 23.7 °C room. Backups are in the ignored `.local/deployment-0.4.0/`; the
 installer is `.local/install_040.py` and `.local/check_040.py` reads the live
 plan. Field results are pending the owner's trial.
+
+### October 13 no heating of an already warm room — 0.4.4
+
+Three days into the 0.4.x trial the owner reported the compressor still running
+with the room 1.1 °C over target on a fully overcast day. The estimator had
+booked the floor's heat as sunshine, and the plan's cost for exceeding the
+target was close to zero. Version 0.4.4 limits what the sun can be blamed for,
+makes the band firm below and costly above, and sends minimum water whenever
+the measured room is more than 0.2 °C over its band; details, the rejected first
+variant and replay numbers are in [PREDICTIVE.md](PREDICTIVE.md). 225 tests
+pass on Python 3.14.7 / HA 2026.7.4, three of them new. A refit of the house model on the new
+days was examined and rejected. Live installation status is recorded below
+once done.

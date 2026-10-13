@@ -120,6 +120,7 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
         await self.controller.async_request_refresh()
         self.assertIn("Predictive plan", self.controller.data["reason"])
+        self.assertIn("no heat while the room is over its band", self.controller.data["reason"])
         self.assertEqual(self.controller.data["proposed"], self.controller.settings.minimum_water)
         self.assertEqual(len(self.controller.data["plan"]), 24)
         self.controller.config["predictive"] = False

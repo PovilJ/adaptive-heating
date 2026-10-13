@@ -54,7 +54,11 @@ class Predictive:
         result = mpc.plan(self.house, self.comfort, steps, self.estimate.state(self.house), self.estimate.bias, running, self.seed)
         self.seed = result.levels
         boost = self.guard.update(room, steps[0].floor)
-        return max(setpoint - 5, min(setpoint + 3, self.comfort.maximum_water, result.water + boost))
+        wants = boost > 0 or self.house.heat_kw(result.water, self.estimate.slab) > 0
+        water = mpc.keep_running(result.water + boost, wants, self.inlet)
+        if mpc.too_warm(room, steps[0].ceiling):
+            water = self.comfort.minimum_water
+        return max(setpoint - 5, min(setpoint + 3, self.comfort.maximum_water, water))
 
 
 class Curve:
@@ -114,6 +118,8 @@ def run(controller, plant, weather, start, end):
     while when < end:
         outdoor = weather.at(when)[0]
         measured = round(plant.room(state) * 5) / 5  # the 0.2 °C thermometer
+        # Return water as the first house reports it: 4.7 °C over the slab estimate running, 2.8 °C idle (10-13 Oct 2026).
+        controller.inlet = state[0] + (4.7 if running else 2.8)
         setpoint = float(controller.decide(when, measured, outdoor, weather, setpoint, running))
         heat = plant.heat_kw(setpoint, state[0])
         if heat > 0:
