@@ -129,6 +129,30 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_request_refresh()
         self.assertIn("Weather compensation", self.controller.data["reason"])
 
+    def test_room_is_averaged_over_half_an_hour_of_sensor_changes(self):
+        self.controller.note_room(22.0, self.now - timedelta(minutes=40))
+        self.controller.note_room(22.6, self.now - timedelta(minutes=5))  # an oven, not the floor
+        self.assertAlmostEqual(self.controller.room(self.now, 22.6), 22.1)
+        self.assertEqual(self.controller.room(self.now, 22.4), 22.4)  # a missed change: trust the sensor
+
+    async def test_a_run_keeps_going_for_its_first_hour(self):
+        self.hass.config = types.SimpleNamespace(latitude=54.7, longitude=25.3)
+        self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
+        self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
+        self.controller.forecast_checked = self.now
+        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.now += timedelta(minutes=30)
+        self.controller.note_operating_event("sensor.operating", "HEAT", self.now - timedelta(minutes=20))
+        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.assertIn("kept running until the compressor has run an hour", self.controller.data["reason"])
+        self.assertGreaterEqual(self.controller.data["proposed"], 30)  # never lowered mid-run, clear of the 28 °C return
+        self.now += timedelta(minutes=50)
+        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
+        await self.controller.async_request_refresh()
+        self.assertNotIn("kept running", self.controller.data["reason"])
+
     async def test_paused_controller_looks_again_within_minutes(self):
         self.set_state("sensor.room", "unavailable")
         await self.controller.async_request_refresh()

@@ -264,3 +264,40 @@ Also learned from the five days of live cycles:
 - Forecast cloud is a poor sunshine measure: on the 12th it said 66–100 % while
   PV made 5 kW and the room gained 1.4 °C with the compressor off. PV as a
   nowcast is still not used.
+
+## 0.4.5: a compressor run lasts at least an hour
+
+On 14 October, the first day of 0.4.4, the compressor ran 06:27–06:56,
+13:39–14:14 and 14:39–15:09: three runs of about half an hour, two of them 25
+minutes apart. The owner pointed out that a start costs electricity before the
+unit runs efficiently, and that a floor-heated room cannot jump 0.6 °C in five
+minutes, so such a reading is something else (an oven) and must not start or
+stop the compressor. The half-hour runs came from the plan's half-hour first
+blocks (and once a 40 °C burst for the 07:00 floor), and from lowering the
+setpoint mid-run: at 14:08 it went from 30 to 29 °C and the unit stopped at
+14:14.
+
+- **Minimum run.** `mpc.MIN_RUN_STEPS = 2`: in the plan a start heats for at
+  least two half hours, so the planner weighs a start as the hour it really is.
+  The coordinator keeps the run it sees start (the operating state entering
+  heating; a defrost pause or a lost reading inside a run is not a new start)
+  going for its first hour: the setpoint stays clear of the return water and is
+  never lowered during that hour. The over-band stop still overrides it.
+- **Room averaging.** Control uses the room averaged over the last 30 minutes
+  of sensor changes, not the latest reading. A slow change passes with at most
+  15 minutes of lag; a short excursion is diluted.
+- `start_cost` stays 0.15: at 0.5 replay showed fewer starts in frost but more
+  hours over the band in mild weather.
+
+Replay (`scripts/backtest.py`, which now models the hour hold and counts runs
+under an hour), 0.4.4 → 0.4.5:
+
+| Period | kWh/day | starts/day | runs under 1 h per day | hours/day over target + 0.5 |
+| --- | --- | --- | --- | --- |
+| 2–10 Oct | 4.7 → 4.6 | 4.8 → 3.0 | 2.2 → 0.0 | 6.8 → 7.8 |
+| 10–20 Mar | 6.9 → 7.0 | 2.6 → 2.1 | 0.4 → 0.0 | 11.6 → 12.2 |
+| 22 Jan–1 Feb | 39.6 → 39.7 | 2.8 → 3.6 | 0.3 → 0.0 | 1.1 → 1.7 |
+
+The replay charges no electricity for a start itself, so it cannot show what
+fewer starts save; it shows the comfort and kWh cost of holding runs is small.
+The room minimum is unchanged (22.1–22.3 °C for a 22.5 °C target).

@@ -29,6 +29,15 @@ async def async_setup_entry(hass, entry):
 
     watched = [coordinator.config.get(k) for k in ("operating_entity", "defrost_entity")]
     entry.async_on_unload(async_track_state_change_event(hass, [e for e in watched if e], operating_changed))
+
+    @callback
+    def room_changed(event):
+        state = event.data.get("new_state")
+        value = temperature(state.state, state.attributes.get("unit_of_measurement")) if state else None
+        if value is not None:
+            coordinator.note_room(value, dt_util.utcnow())
+
+    entry.async_on_unload(async_track_state_change_event(hass, [coordinator.config["indoor_entity"]], room_changed))
     if coordinator.ac.configured or coordinator.ac.session or coordinator.ac.recovery_pending:
         entry.async_on_unload(async_track_time_interval(hass, coordinator.async_ac_tick, timedelta(seconds=30)))
 

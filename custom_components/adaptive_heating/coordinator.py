@@ -63,6 +63,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.lock = asyncio.Lock()
         self.previous = None
         self.operating_events = []
+        self.run_started = None  # when the compressor last started floor heating, from state changes
+        self.room_readings = []  # (time, °C) from the room sensor's last state changes
         self.last_commanded = None
         self.last_command_time = None
         self.last_seen_output = None
@@ -173,8 +175,29 @@ class HeatingCoordinator(DataUpdateCoordinator):
             return value / 1000 if unit == "Wh" else value
         return temperature(state.state, unit)
 
+    def note_room(self, value, now):
+        self.room_readings = (self.room_readings + [(now, value)])[-20:]
+
+    def room(self, now, current):
+        """The room averaged over the last 30 minutes of sensor changes.
+
+        A floor-heated room cannot rise 0.6 °C in five minutes; an oven, a door or a
+        warm draught past the sensor can, and one such reading must not start or
+        stop the compressor.
+        """
+        start = now - timedelta(minutes=30)
+        earlier = [v for t, v in self.room_readings if t <= start]
+        points = ([(start, earlier[-1])] if earlier else []) + [(t, v) for t, v in self.room_readings if start < t <= now]
+        if not points or points[-1][1] != current:
+            return current
+        spans = [((b[0] if b else now) - a[0]).total_seconds() for a, b in zip(points, points[1:] + [None])]
+        total = sum(spans)
+        return sum(v * span for (_, v), span in zip(points, spans)) / total if total > 0 else current
+
     def snapshot(self, now):
         indoor = self.reading("indoor_entity", now)
+        if indoor is not None:
+            indoor = self.room(now, indoor)
         weather = self.fresh_state("weather_entity", now)
         outdoor = self.reading("outdoor_entity", now) if self.config.get("outdoor_entity") else None
         if outdoor is None and not self.config.get("outdoor_entity") and weather:
@@ -244,6 +267,13 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 return False
             return None
         phase = phase_for(state)
+        if entity_id == self.config.get("operating_entity"):
+            # Starts are the operating state entering heating; a defrost pause or a lost
+            # reading inside a run is not a new start.
+            if phase and self.run_started is None:
+                self.run_started = now
+            elif phase is False:
+                self.run_started = None
         if entity_id == self.config.get("defrost_entity"):
             if state == "on":
                 phase = False
@@ -634,14 +664,21 @@ class HeatingCoordinator(DataUpdateCoordinator):
             water_step=step if step and 0.5 <= step <= 2 else 1.0)
         offset = dt_util.as_local(now).utcoffset()
         steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0)
+        # A run we started keeps going for its first hour: a start costs more than half an hour saves.
+        minutes = ((now - self.run_started).total_seconds() / 60
+                   if self.run_started is not None and snapshot["floor_heating_active"] else None)
+        run_left = (math.ceil((mpc.MIN_RUN_STEPS * mpc.STEP_HOURS * 60 - minutes) / (mpc.STEP_HOURS * 60))
+                    if minutes is not None and minutes < mpc.MIN_RUN_STEPS * mpc.STEP_HOURS * 60 else 0)
         arguments = (self.house, comfort, steps, self.estimate.state(self.house), self.estimate.bias,
-                     bool(snapshot["floor_heating_active"]), self.plan_seed)
+                     bool(snapshot["floor_heating_active"]), self.plan_seed, run_left)
         job = getattr(self.hass, "async_add_executor_job", None)
         plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
         self.plan_seed = plan.levels
         boost = self.guard.update(snapshot["indoor"], steps[0].floor)
         wants_heat = boost > 0 or self.house.heat_kw(plan.water, self.estimate.slab) > 0
-        held = mpc.keep_running(plan.water + boost, wants_heat, self.reading("inlet_entity", now))
+        held = mpc.keep_running(plan.water + boost, wants_heat or run_left > 0, self.reading("inlet_entity", now))
+        if run_left > 0:  # lowering the setpoint mid-run is what stopped the unit after half an hour
+            held = max(held, snapshot["output"])
         # Safety net for a wrong model on the warm side, as the Guard is on the cold side.
         warm = mpc.too_warm(snapshot["indoor"], steps[0].ceiling)
         water = comfort.minimum_water if warm else min(comfort.maximum_water, held)
@@ -652,7 +689,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
             reason += "; no heat while the room is over its band"
         elif boost:
             reason += f"; +{boost:.0f} °C because the room is under its band"
-        if not warm and held > plan.water + boost:
+        if not warm and run_left > 0 and not wants_heat:
+            reason += "; kept running until the compressor has run an hour"
+        elif not warm and held > plan.water + boost:
             reason += "; held above the return water so the compressor keeps running"
         hourly = [{"at": (now + timedelta(hours=i / 2 + 0.5)).isoformat(timespec="minutes"),
                    "water": plan.waters[i], "room": round(plan.rooms[i], 2), "floor": steps[i].floor}

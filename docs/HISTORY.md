@@ -365,3 +365,12 @@ variant and replay numbers are in [PREDICTIVE.md](PREDICTIVE.md). 225 tests
 pass on Python 3.14.7 / HA 2026.7.4, three of them new. A refit of the house model on the new
 days was examined and rejected. Live installation status is recorded below
 once done.
+
+### October 14 minimum one-hour compressor runs — 0.4.5
+
+The owner installed 0.4.4 himself through HACS (HA restarted 10:36). The same
+day showed three half-hour compressor runs. Version 0.4.5 plans and holds every
+run for at least an hour and controls on the room averaged over 30 minutes so
+a short excursion (an oven) cannot start or stop the compressor. 228 tests pass
+on Python 3.14.7 / HA 2026.7.4, three of them new. Details and replay numbers
+are in [PREDICTIVE.md](PREDICTIVE.md).

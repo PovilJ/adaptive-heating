@@ -73,6 +73,15 @@ class Planning(unittest.TestCase):
         flat = replace(self.comfort, night_floor=22.5)
         self.assertLess(self.plan(MIDNIGHT, 0, 90).energy_kwh, 1.05 * self.plan(MIDNIGHT, 0, 90, comfort=flat).energy_kwh)
 
+    def test_a_started_run_lasts_an_hour(self):
+        state, sky = self.house.resting(22.0, 8), steps(MIDNIGHT, 8, 90, self.comfort)
+        half_hour = self.house.heat_kw(31, state[0]) / self.house.cop(31, 8) * mpc.STEP_HOURS
+        once = mpc.simulate(self.house, self.comfort, sky, [31] + [25] * 71, state)[2]
+        self.assertGreater(once, 1.6 * half_hour)  # 14 October: 29-35 minute runs, 25 minutes apart
+        held = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True, run_left=1)
+        free = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True)
+        self.assertGreater(held[1][3], free[1][3] + 0.005)  # the run under way still heats its last half hour
+
     def test_guard_raises_water_while_the_room_stays_under_its_band(self):
         guard = mpc.Guard()
         self.assertEqual([guard.update(21.8, 22.5) for _ in range(3)], [1, 2, 3])
