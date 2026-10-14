@@ -80,6 +80,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.estimate = mpc.Estimate()
         self.guard = mpc.Guard()
         self.plan_seed = None
+        self.too_warm = False
         self.events = []
         self.started = dt_util.utcnow()
         self.disinfection = DisinfectionController(self)
@@ -610,7 +611,9 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 result.update(proposed=decision.proposed, prediction=decision.predicted_minimum, reason=decision.reason)
                 result.update(planning_outdoor=decision.planning_outdoor,
                               cooling_compensation=decision.cooling_compensation)
-                limited = self.output_limit(decision.proposed, snapshot["output"], now)
+                # The over-band stop is not slowed by the fall limit: it exists to stop the compressor now.
+                limited = self.output_limit(decision.proposed, snapshot["output"], now,
+                                            fast_fall=predictive is not None and self.too_warm)
                 result["limited"] = limited
                 if limited is None:
                     result.update(status="paused", reason="Setpoint or device limits invalid; check output entity and water limits")
@@ -661,7 +664,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
             night_floor=min(self.settings.target, self.planner_settings.night_minimum),
             night_start=int(self.planner_settings.quiet_start_hour), warm_by=int(self.planner_settings.morning_hour),
             minimum_water=self.settings.minimum_water, maximum_water=self.settings.maximum_water,
-            water_step=step if step and 0.5 <= step <= 2 else 1.0)
+            water_step=step if step and 0.5 <= step <= 2 else 1.0,
+            rise_step=self.settings.rise_per_hour * mpc.STEP_HOURS, fall_step=self.settings.fall_per_hour * mpc.STEP_HOURS)
         offset = dt_util.as_local(now).utcoffset()
         steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0)
         # A run we started keeps going for its first hour: a start costs more than half an hour saves.
@@ -670,7 +674,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         run_left = (math.ceil((mpc.MIN_RUN_STEPS * mpc.STEP_HOURS * 60 - minutes) / (mpc.STEP_HOURS * 60))
                     if minutes is not None and minutes < mpc.MIN_RUN_STEPS * mpc.STEP_HOURS * 60 else 0)
         arguments = (self.house, comfort, steps, self.estimate.state(self.house), self.estimate.bias,
-                     bool(snapshot["floor_heating_active"]), self.plan_seed, run_left)
+                     bool(snapshot["floor_heating_active"]), self.plan_seed, run_left, snapshot["output"])
         job = getattr(self.hass, "async_add_executor_job", None)
         plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
         self.plan_seed = plan.levels
@@ -680,7 +684,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         if run_left > 0:  # lowering the setpoint mid-run is what stopped the unit after half an hour
             held = max(held, snapshot["output"])
         # Safety net for a wrong model on the warm side, as the Guard is on the cold side.
-        warm = mpc.too_warm(snapshot["indoor"], steps[0].ceiling)
+        warm = self.too_warm = mpc.too_warm(snapshot["indoor"], steps[0].ceiling)
         water = comfort.minimum_water if warm else min(comfort.maximum_water, held)
         day = plan.rooms[:48]
         reason = (f"Predictive plan: {water:.0f} °C water now; room {min(day):.1f}–{max(day):.1f} °C "
@@ -698,7 +702,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
                   for i in range(1, 48, 2)]
         return water, round(min(day), 2), reason, hourly, round(plan.energy_kwh * 48 / len(plan.rooms), 2)
 
-    def output_limit(self, proposed, current, now):
+    def output_limit(self, proposed, current, now, fast_fall=False):
         state = self.hass.states.get(self.config["output_entity"])
         if state is None:
             return None
@@ -717,7 +721,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         elapsed = interval if elapsed >= interval - 1 / 60 else elapsed
         return limited_output(proposed, current, max(lo, self.settings.minimum_water),
                               min(hi, self.settings.maximum_water), step, lo, elapsed,
-                              self.settings.rise_per_hour, self.settings.fall_per_hour)
+                              self.settings.rise_per_hour, 1000.0 if fast_fall else self.settings.fall_per_hour)
 
     async def apply(self, value, observed, result):
         # All external awaits happen before a fresh final gate. Mode changes can

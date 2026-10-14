@@ -52,7 +52,7 @@ class Predictive:
         self.estimate.update(self.house, when.timestamp(), room, outdoor, setpoint, 1.0 if running else 0.0, weather.sun(when))
         steps = mpc.horizon(when, weather.forecast(when), self.comfort, weather.loc["lat"], weather.loc["lon"], outdoor, OFFSET)
         result = mpc.plan(self.house, self.comfort, steps, self.estimate.state(self.house), self.estimate.bias, running, self.seed,
-                          self.run_left)
+                          self.run_left, setpoint)
         self.seed = result.levels
         boost = self.guard.update(room, steps[0].floor)
         wants = boost > 0 or self.house.heat_kw(result.water, self.estimate.slab) > 0
@@ -60,8 +60,8 @@ class Predictive:
         if self.run_left > 0:
             water = max(water, setpoint)
         if mpc.too_warm(room, steps[0].ceiling):
-            water = self.comfort.minimum_water
-        return max(setpoint - 5, min(setpoint + 3, self.comfort.maximum_water, water))
+            return self.comfort.minimum_water
+        return max(setpoint - self.comfort.fall_step, min(setpoint + self.comfort.rise_step, self.comfort.maximum_water, water))
 
 
 class Curve:
@@ -117,14 +117,15 @@ def run(controller, plant, weather, start, end):
     when, setpoint, running = start, 25.0, False
     state = plant.resting(TARGET, weather.at(start)[0])
     kwh = starts = cold = night_cold = warm = total = 0
-    rooms, run_steps, runs = [], 0, []
+    rooms, run_steps, runs, moves = [], 0, [], []
     while when < end:
         outdoor = weather.at(when)[0]
         measured = round(plant.room(state) * 5) / 5  # the 0.2 °C thermometer
         # Return water as the first house reports it: 4.7 °C over the slab estimate running, 2.8 °C idle (10-13 Oct 2026).
         controller.inlet = state[0] + (4.7 if running else 2.8)
         controller.run_left = max(0, mpc.MIN_RUN_STEPS - run_steps) if running else 0
-        setpoint = float(controller.decide(when, measured, outdoor, weather, setpoint, running))
+        before, setpoint = setpoint, float(controller.decide(when, measured, outdoor, weather, setpoint, running))
+        moves.append(abs(setpoint - before))
         heat = plant.heat_kw(setpoint, state[0])
         if heat > 0:
             kwh += heat / plant.cop(setpoint, outdoor) * (1.15 if heat < plant.q_min else 1) * 0.5
@@ -146,7 +147,8 @@ def run(controller, plant, weather, start, end):
     return (f"{controller.name:12} {kwh / days:6.1f} kWh/day | room mean {sum(rooms) / total:5.2f} min {min(rooms):5.2f} max {max(rooms):5.2f}"
             f" | day <{TARGET - 0.3:.1f}: {cold / 2 / days:4.1f} h/day | night <21.4: {night_cold / 2 / days:4.1f} h/day"
             f" | >{TARGET + 0.5:.1f}: {warm / 2 / days:4.1f} h/day | starts {starts / days:3.1f}/day"
-            f" | runs under 1 h {sum(r < 2 for r in runs) / days:3.1f}/day")
+            f" | runs under 1 h {sum(r < 2 for r in runs) / days:3.1f}/day"
+            f" | setpoint moves over 2 °C {sum(m > 2 for m in moves) / days:3.1f}/day")
 
 
 if __name__ == "__main__":

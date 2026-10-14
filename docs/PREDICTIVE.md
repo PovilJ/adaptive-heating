@@ -301,3 +301,34 @@ under an hour), 0.4.4 → 0.4.5:
 The replay charges no electricity for a start itself, so it cannot show what
 fewer starts save; it shows the comfort and kWh cost of holding runs is small.
 The room minimum is unchanged (22.1–22.3 °C for a 22.5 °C target).
+
+## 0.4.6: the plan knows how fast the setpoint may move
+
+The owner noticed requests like 25 → 32 → 33 → 25 °C and recalled that the
+PyScript changed the setpoint in small steps. It did: every 30 minutes at most
++2 °C up and −1 °C down (`execute_decision` in `legacy/smart_heating.py`). The
+integration has the same limiter (`rise_per_hour`, `fall_per_hour`; defaults 4
+and 2 °C per hour, the PyScript's values), but the first house was set to 6 and
+10 with 0.4.0, and the planner ignored the limiter altogether: it planned jumps
+the limiter then cut, so what ran was not what was planned.
+
+- `mpc.simulate` and `mpc.plan` take the current setpoint and follow the
+  requested levels only as fast as `Comfort.rise_step` / `fall_step` allow; the
+  coordinator fills these from the options. A plan now knows that a ramp down
+  keeps heating, and that a ramp up takes time.
+- The over-band stop (`too_warm`) is not slowed by the fall limit.
+
+Replay, by setpoint steps per half hour (rise / fall), with planning that knows them:
+
+| Steps | Oct kWh/day | Oct hours over target + 0.5 | Oct starts/day | setpoint moves over 2 °C per day (Oct / Jan) | Mar kWh/day | Jan kWh/day |
+| --- | --- | --- | --- | --- | --- | --- |
+| +3 / −5 (first house since 0.4.0) | 4.7 | 6.2 | 3.4 | 5.8 / 12.3 | 6.8 | 39.5 |
+| **+2 / −5** | 4.7 | 7.6 | 3.6 | 3.5 / 4.3 | 6.7 | 39.4 |
+| +2 / −1 (PyScript) | 5.5 | 14.4 | 0.8 | 0.6 / 0.6 | 7.6 | 39.7 |
+
+The PyScript's slow fall gives very few starts but keeps delivering heat after
+it is needed: 12–17 % more electricity in mild weather and twice the hours over
+the band in replay. The replay charges nothing for a start, so the true balance
+is closer than that; at 0.3 kWh per start the October difference would roughly
+cancel. Recommended for the first house: rise 4 °C/h (+2 per half hour, as the
+PyScript), fall unchanged at 10 °C/h.

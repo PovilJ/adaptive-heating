@@ -374,3 +374,12 @@ run for at least an hour and controls on the room averaged over 30 minutes so
 a short excursion (an oven) cannot start or stop the compressor. 228 tests pass
 on Python 3.14.7 / HA 2026.7.4, three of them new. Details and replay numbers
 are in [PREDICTIVE.md](PREDICTIVE.md).
+
+### October 14 the plan respects the setpoint limiter — 0.4.6
+
+Prompted by the owner's comparison with the PyScript's small steps, the planner
+now plans within the configured rise and fall limits from the current
+setpoint, and the over-band stop bypasses the fall limit. Recommended option
+change for the first house: `rise_per_hour` 6 → 4. 229 tests pass on Python
+3.14.7 / HA 2026.7.4. Replay comparison of step sizes is in
+[PREDICTIVE.md](PREDICTIVE.md).

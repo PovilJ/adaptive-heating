@@ -122,6 +122,7 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Predictive plan", self.controller.data["reason"])
         self.assertIn("no heat while the room is over its band", self.controller.data["reason"])
         self.assertEqual(self.controller.data["proposed"], self.controller.settings.minimum_water)
+        self.assertEqual(self.controller.data["limited"], self.controller.settings.minimum_water)  # not slowed by the fall limit
         self.assertEqual(len(self.controller.data["plan"]), 24)
         self.controller.config["predictive"] = False
         self.now += timedelta(minutes=30)
@@ -140,18 +141,21 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
         self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
         self.controller.forecast_checked = self.now
-        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.now += timedelta(minutes=30)
-        self.controller.note_operating_event("sensor.operating", "HEAT", self.now - timedelta(minutes=20))
-        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertIn("kept running until the compressor has run an hour", self.controller.data["reason"])
-        self.assertGreaterEqual(self.controller.data["proposed"], 30)  # never lowered mid-run, clear of the 28 °C return
-        self.now += timedelta(minutes=50)
-        self.set_state("sensor.room", 22.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertNotIn("kept running", self.controller.data["reason"])
+        mpc = adapter.mpc
+        idle = mpc.Plan(25.0, [25.0] * len(mpc.BLOCKS), [25.0] * mpc.HORIZON_STEPS, [22.2] * mpc.HORIZON_STEPS, 0.0, 0.0)
+        with patch.object(mpc, "plan", return_value=idle):  # the plan itself wants no heat
+            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
+            await self.controller.async_request_refresh()
+            self.now += timedelta(minutes=30)
+            self.controller.note_operating_event("sensor.operating", "HEAT", self.now - timedelta(minutes=20))
+            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
+            await self.controller.async_request_refresh()
+            self.assertIn("kept running until the compressor has run an hour", self.controller.data["reason"])
+            self.assertGreaterEqual(self.controller.data["proposed"], 30)  # never lowered mid-run, clear of the 28 °C return
+            self.now += timedelta(minutes=50)
+            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
+            await self.controller.async_request_refresh()
+            self.assertNotIn("kept running", self.controller.data["reason"])
 
     async def test_paused_controller_looks_again_within_minutes(self):
         self.set_state("sensor.room", "unavailable")

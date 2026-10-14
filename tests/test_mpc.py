@@ -82,6 +82,14 @@ class Planning(unittest.TestCase):
         free = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True)
         self.assertGreater(held[1][3], free[1][3] + 0.005)  # the run under way still heats its last half hour
 
+    def test_the_plan_knows_the_setpoint_only_falls_a_degree_per_half_hour(self):
+        state, sky = self.house.resting(22.0, 8), steps(MIDNIGHT, 8, 90, self.comfort)
+        ramp = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True, setpoint=33)[1]
+        drop = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True)[1]
+        self.assertGreater(ramp[4], drop[4] + 0.05)  # 33, 32, 31 ... still heats on the way down
+        rise = mpc.simulate(self.house, self.comfort, sky, [33] * 72, state, setpoint=25)
+        self.assertLess(rise[2], mpc.simulate(self.house, self.comfort, sky, [33] * 72, state)[2])
+
     def test_guard_raises_water_while_the_room_stays_under_its_band(self):
         guard = mpc.Guard()
         self.assertEqual([guard.update(21.8, 22.5) for _ in range(3)], [1, 2, 3])

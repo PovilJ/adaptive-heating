@@ -122,6 +122,8 @@ class Comfort:
     minimum_water: float = 25.0
     maximum_water: float = 40.0
     water_step: float = 1.0
+    rise_step: float = 2.0      # °C the setpoint may rise per half hour, as the PyScript did
+    fall_step: float = 1.0      # and fall
     cold_weight: float = 60.0   # kWh-equivalents per °C² hour below the band: the floor is firm
     warm_weight: float = 4.0    # per °C hour above it; at the old 1.5 per °C² heating a room 1 °C over target was nearly free
     start_cost: float = 0.15    # kWh-equivalent per compressor start
@@ -169,15 +171,20 @@ def horizon(now: datetime, forecast: list[tuple[datetime, float, float | None]],
 
 
 def simulate(house: House, comfort: Comfort, steps: list[Step], waters: list[float], state: tuple,
-             bias: float = 0.0, running: bool = False, run_left: int = 0) -> tuple[float, list[float], float]:
+             bias: float = 0.0, running: bool = False, run_left: int = 0,
+             setpoint: float | None = None) -> tuple[float, list[float], float]:
     """Return (cost, room path, electricity kWh) for one water temperature per half hour.
 
     `run_left` is how many half hours the run already under way must still last.
+    From `setpoint`, the water follows the requested levels only as fast as
+    `rise_step` and `fall_step` allow, so a plan knows a ramp down keeps heating.
     """
     cost = energy = 0.0
     path = []
     previous = waters[0]
     for step, water in zip(steps, waters):
+        if setpoint is not None:
+            water = setpoint = min(setpoint + comfort.rise_step, max(setpoint - comfort.fall_step, water))
         heat = house.heat_kw(water, state[0])
         if run_left > 0:  # the setpoint is held above the return water until the run has lasted its hour
             heat = max(heat, house.q_min)
@@ -223,13 +230,14 @@ class Plan:
 
 
 def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: float = 0.0,
-         running: bool = False, seed: list[float] | None = None, run_left: int = 0) -> Plan:
+         running: bool = False, seed: list[float] | None = None, run_left: int = 0,
+         setpoint: float | None = None) -> Plan:
     """Coordinate search over block water temperatures; small enough to run every cycle."""
     count = int(round((comfort.maximum_water - comfort.minimum_water) / comfort.water_step))
     choices = [comfort.minimum_water + i * comfort.water_step for i in range(count + 1)]
 
     def score(levels):
-        return simulate(house, comfort, steps, expand(levels), state, bias, running, run_left)[0]
+        return simulate(house, comfort, steps, expand(levels), state, bias, running, run_left, setpoint)[0]
 
     # Coordinate search cannot move heat between blocks in one move, so begin from both extremes:
     # no heating, and the water that would hold the target against the coldest forecast hour.
@@ -259,7 +267,7 @@ def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: 
         if current < best_cost:
             best, best_cost = levels, current
     waters = expand(best)
-    cost, rooms, energy = simulate(house, comfort, steps, waters, state, bias, running, run_left)
+    cost, rooms, energy = simulate(house, comfort, steps, waters, state, bias, running, run_left, setpoint)
     return Plan(best[0], best, waters, rooms, energy, cost)
 
 
