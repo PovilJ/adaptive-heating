@@ -23,7 +23,7 @@ card-mod and apexcharts-card. The generator does not install them and has no nat
 | Card | Colour meaning |
 | --- | --- |
 | Room | blue more than 0.5 °C below target, green within 0.5 °C, deep orange above |
-| Heat pump | orange heating floor, red hot water, indigo defrost, blue compressor resting (heating still enabled), grey off |
+| Heat pump | orange Heating, red Hot water, indigo Defrost, blue Resting (compressor paused, heating still enabled), grey Off |
 | Power | grey under 100 W, green under 1.5 kW, amber under 3 kW, red above |
 | COP | green from 4, light green from 3, orange from 2, red below, grey when not running |
 | Tank | red from 45 °C, orange from 38 °C, blue below |

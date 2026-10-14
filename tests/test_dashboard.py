@@ -88,7 +88,7 @@ class DashboardTemplates(unittest.IsolatedAsyncioTestCase):
         content = self.render()
         self.assertNotIn("None", content)
         self.assertNotIn("0.0 °C", content)
-        self.assertIn("Controller unavailable", content)
+        self.assertIn("Unavailable", content)
 
     async def test_live_values_render(self):
         set_state = self.hass.states.async_set
@@ -101,7 +101,7 @@ class DashboardTemplates(unittest.IsolatedAsyncioTestCase):
         set_state(E["status"], "command_sent", {"heating_enabled": True, "observed_room_cooling_celsius_per_hour": .2})
         set_state(E["planner_status"], "prepare", {"effective_target": 22.8, "prepare_at": "invalid"})
         content = self.render()
-        for expected in ("21.3 °C", "Target 22.5° · 1.2° below ↘", "blue", "Compressor resting",
+        for expected in ("21.3 °C", "Target 22.5° · 1.2° below ↘", "blue", "Resting",
                          "Water target · next 29.0°", "Preheating the floor", "22.8 °C"):
             self.assertIn(expected, content)
         self.assertNotIn("None", content)

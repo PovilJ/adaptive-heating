@@ -69,6 +69,14 @@ def build(mapping):
         """Reading and its real control on one surface, as in the original dashboard."""
         if not e.get(key):
             return info
+        if kind == "select":
+            # Mushroom's select card draws HA's dropdown, which HA loads lazily: about half the
+            # page loads showed an empty box with the options as loose text. The tile card's own
+            # dropdown ships with the tile, so it is always ready.
+            control = {"type": "tile", "entity": e[key], "name": "Control mode", "icon": "mdi:tune-variant",
+                       "hide_state": True, "features": [{"type": "select-options"}], "features_position": "inline",
+                       "grid_options": {"columns": 12}}
+            return {"type": "vertical-stack", "cards": [info, control], "grid_options": {"columns": 12}} if info else control
         control = {"type": f"custom:mushroom-{kind}-card", "entity": e[key], "layout": "horizontal",
                    "grid_options": {"columns": 12}}
         if kind == "number":
@@ -173,13 +181,13 @@ def build(mapping):
         "{{ 'blue' if g < -0.5 else 'deep-orange' if g > 0.5 else 'green' }}{% else %}grey{% endif %}",
         12, entity="indoor"), "target")
 
-    labels = ("{{ {'waiting':'Next cycle pending','command_sent':'Water target adjusted','maintaining':'Holding water target',"
-              "'observing':'Watching and learning','paused':'Adjustment paused','off':'Controller off'}"
-              ".get(states('@status@'),'Controller unavailable') }}")
+    labels = ("{{ {'waiting':'Waiting','command_sent':'Adjusted','maintaining':'Holding',"
+              "'observing':'Watching','paused':'Paused','off':'Control off'}"
+              ".get(states('@status@'),'Unavailable') }}")
     heat_pump = with_control(card(
-        activity("Defrosting", "Heating floor", "Heating hot water", "Compressor resting", "Heat pump off",
+        activity("Defrost", "Heating", "Hot water", "Resting", "Off",
                  "{{ u | replace('_',' ') | capitalize }}"),
-        "{% if is_state('@status@','paused') %}{{ states('@reason@') | truncate(80, true) }}{% else %}" + labels
+        "{% if is_state('@status@','paused') %}{{ states('@reason@') | truncate(40, true) }}{% else %}" + labels
         + "{% set d = state_attr('@status@','recent_decisions') or [] %}"
         "{% if d %} · {{ as_local(as_datetime(d[0].checked_at)).strftime('%H:%M') }}{% endif %}{% endif %}",
         "mdi:heat-pump", activity("indigo", "orange", "red", "blue", "grey", "grey"), 12, entity="operating"),
