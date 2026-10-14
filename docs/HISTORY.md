@@ -383,3 +383,13 @@ setpoint, and the over-band stop bypasses the fall limit. Recommended option
 change for the first house: `rise_per_hour` 6 → 4. 229 tests pass on Python
 3.14.7 / HA 2026.7.4. Replay comparison of step sizes is in
 [PREDICTIVE.md](PREDICTIVE.md).
+
+### October 14 0.4.6 installed
+
+At the owner's request HACS installed `55e639f` through the API (its install
+call worked this time) and HA 2026.10.1 restarted; the integration reports
+0.4.6. The repository installer was not used: its safety check refuses while
+the tank controller still flags the failed 11 October cycle. After the restart
+the main control mode came back as Observe and was set to Automatic again;
+tank and AC stay Observe, room target 22.0 °C, options unchanged (rise 6, fall
+10 °C/h). The first hour runs on the fallback curve as usual.
