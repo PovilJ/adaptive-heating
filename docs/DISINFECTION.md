@@ -30,16 +30,20 @@ required, and all entity mappings are selected separately for each house.
 | --- | --- | --- |
 | Boosted tank target | 68 °C | Temporary normal tank setpoint, validated against the device's min/max/step. |
 | Hold threshold | 65 °C | Measured tank temperature must stay at or above this value. |
-| Hold duration | 5 minutes | Continuous elapsed time between fresh sensor reports; polls do not count as new reports. |
+| Hold duration | 5 minutes | Continuous elapsed time at or above the threshold while the latest tank reading is fresh. |
 | Scheduling window | 12–16 days | Opportunities begin after day 12; day 16 removes energy/comfort deferrals. |
 | Maximum cycle duration | 4 hours | Absolute deadline including heating and holding; never extended by dips or defrost. |
-| Maximum sample age/gap | 90 seconds | A stale reading aborts; a gap between otherwise fresh reports resets the hold. |
+| Maximum reading age | 30 minutes | A reading older than this aborts; so does device data staying unavailable this long. |
 
-The device must report tank temperature frequently enough for the chosen sample
-limit. The 30-second watcher also listens for temperature changes, so a reported
-dip resets the hold even between timer checks. Repeated identical *reports* may
-count when HA's `last_reported` advances; repeatedly reading the same report does
-not. A single sensor cannot establish conditions between measurements or elsewhere
+The Versati tank sensor reports only when the value changes, so a steady tank
+(or the slow electric-heater climb above about 50 °C) can send nothing for
+many minutes; an unchanged reading up to 30 minutes old is still valid. The
+30-second watcher also listens for temperature changes, so a reported dip resets
+the hold even between timer checks. When the heat pump's entities go
+unavailable during a cycle (the Versati link drops for about a minute at a
+time) the cycle waits, with the hold reset, and aborts only if the outage lasts
+longer than the maximum reading age; the device keeps heating to its own tank
+target meanwhile. A single sensor cannot establish conditions between measurements or elsewhere
 in the tank/plumbing. “Completed” describes this configured sensor/time criterion
 and confirmed setpoint restoration, not a certification of water hygiene.
 
@@ -80,7 +84,7 @@ to heat domestic water. It does not power on or change the pump's operating mode
   command. The device must acknowledge the target within two minutes.
 - A dip below the threshold resets the entire hold. Defrost also resets it and
   pauses counting while leaving the absolute runtime deadline in effect.
-- Missing/stale tank data, an inhibit, invalid operating state, timeout, or a
+- Stale tank data, device data unavailable beyond the maximum reading age, an inhibit, invalid operating state, timeout, or a
   failed command interrupts the cycle and initiates restoration.
 - A manual tank-target change ends the cycle without overwriting that value.
 - Completion is recorded only after the hold and observed return to the saved

@@ -16,7 +16,7 @@ DEFAULTS = {
     "disinfection_min_days": 12,
     "disinfection_max_days": 16,
     "disinfection_timeout_hours": 4.0,
-    "disinfection_sample_seconds": 90,
+    "disinfection_sample_minutes": 30,
     "disinfection_hot_water_state": "HOT WATER",
     "disinfection_idle_state": "OFF",
 }
@@ -34,7 +34,7 @@ class DisinfectionSettings:
     disinfection_min_days: int = 12
     disinfection_max_days: int = 16
     disinfection_timeout_hours: float = 4
-    disinfection_sample_seconds: int = 90
+    disinfection_sample_minutes: int = 30
 
     def __post_init__(self):
         if any(finite(v) is None for v in asdict(self).values()):
@@ -49,34 +49,33 @@ class DisinfectionSettings:
             raise ValueError("Timeout must be 0.25–8 hours")
         if self.disinfection_hold_minutes * 60 >= self.disinfection_timeout_hours * 3600:
             raise ValueError("Timeout must exceed the hold duration")
-        if not 30 <= self.disinfection_sample_seconds <= 300:
-            raise ValueError("Maximum sample age/gap must be 30–300 seconds")
+        if not 5 <= self.disinfection_sample_minutes <= 120:
+            raise ValueError("Maximum tank reading age must be 5–120 minutes")
 
 
 @dataclass
 class TemperatureHold:
-    """Count elapsed sensor-report time, never repeated polls or missing time."""
+    """Count time above the threshold while the latest tank reading is fresh.
+
+    The tank sensor reports only on change, so a steady tank sends nothing for
+    many minutes; an unchanged recent reading still holds.
+    """
     since: float | None = None
-    previous: float | None = None
     seconds: float = 0
 
     def reset(self):
-        self.since = self.previous = None
+        self.since = None
         self.seconds = 0
 
     def observe(self, now, reported, value, settings):
-        gap = settings.disinfection_sample_seconds
         if (finite(value) is None or finite(reported) is None
-                or not 0 <= now - reported <= gap
+                or not 0 <= now - reported <= settings.disinfection_sample_minutes * 60
                 or value < settings.disinfection_threshold):
             self.reset()
             return False
-        if self.previous is not None and reported == self.previous:
-            return False
-        if self.previous is None or not 0 < reported - self.previous <= gap:
+        if self.since is None:
             self.since = reported
-        self.previous = reported
-        self.seconds = max(0, reported - self.since)
+        self.seconds = max(0, now - self.since)
         return self.seconds >= settings.disinfection_hold_minutes * 60
 
 

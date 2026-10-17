@@ -126,9 +126,19 @@ class DisinfectionController:
             return None, None
         stamp = (getattr(state, "last_reported", None) or state.last_updated).timestamp()
         value = temperature(state.state, state.attributes.get("unit_of_measurement"))
-        if value is None or not 0 <= value <= 90 or not 0 <= now - stamp <= self.settings.disinfection_sample_seconds:
+        if value is None or not 0 <= value <= 90 or not 0 <= now - stamp <= self.settings.disinfection_sample_minutes * 60:
             return None, stamp
         return value, stamp
+
+    def offline(self):
+        """True while a device entity the guard reads is unavailable (link drop)."""
+        keys = ("tank_temperature_entity", "tank_target_entity", "operating_entity", "inhibit_entity")
+        for key in keys:
+            entity = self.owner.config.get(key)
+            state = self.hass.states.get(entity) if entity else None
+            if entity and (state is None or state.state in ("unknown", "unavailable", "")):
+                return True
+        return False
 
     def guard(self, now, *, starting=False):
         if starting and self.owner.shutting_down:
@@ -304,9 +314,16 @@ class DisinfectionController:
                 await self.abort("timed_out", "Cycle runtime expired or the clock moved backwards")
                 return
             error = self.guard(now)
+            if error and self.offline() and now - cycle.get("seen_at", cycle["started"]) <= self.settings.disinfection_sample_minutes * 60:
+                # The device keeps heating to its own tank target through a
+                # brief link drop (Versati drops out for about a minute).
+                self.hold.reset()
+                self.reason = "Heat-pump data unavailable; waiting for it to return"
+                return
             if error:
                 await self.abort("failed", error)
                 return
+            cycle["seen_at"] = now
             current = self.target_value(cycle["target_entity"])
             if self.manual_override or (abs(current - cycle["boost"]) >= 0.05 and cycle.get("acknowledged")):
                 await self.finish("manual_override", "Tank target changed externally; automatic restoration skipped")

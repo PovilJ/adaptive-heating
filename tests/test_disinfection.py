@@ -14,17 +14,15 @@ policy = module("disinfection")
 
 
 class HoldPolicy(unittest.TestCase):
-    def test_five_minutes_requires_elapsed_fresh_reports(self):
+    def test_five_minutes_counts_while_the_reading_is_fresh(self):
         hold, settings = policy.TemperatureHold(), policy.DisinfectionSettings()
         self.assertFalse(hold.observe(1000, 1000, 65, settings))
-        for _ in range(50):
-            self.assertFalse(hold.observe(1010, 1000, 65, settings))
-        for seconds in range(30, 300, 30):
-            self.assertFalse(hold.observe(1000 + seconds, 1000 + seconds, 65, settings))
-        self.assertTrue(hold.observe(1300, 1300, 65, settings))
+        # A steady tank reports nothing new; the unchanged reading still holds.
+        self.assertFalse(hold.observe(1290, 1000, 65, settings))
+        self.assertTrue(hold.observe(1300, 1000, 65, settings))
 
-    def test_dip_missing_data_and_gap_reset_continuity(self):
-        for interruption in ((1120, 1120, 64.9), (1120, 1120, None), (1250, 1250, 66), (1250, 1060, 66)):
+    def test_dip_missing_data_and_stale_reading_reset_continuity(self):
+        for interruption in ((1120, 1120, 64.9), (1120, 1120, None), (1060 + 31 * 60, 1060, 66), (1120, None, 66)):
             hold, settings = policy.TemperatureHold(), policy.DisinfectionSettings()
             hold.observe(1000, 1000, 66, settings)
             hold.observe(1060, 1060, 66, settings)
@@ -34,7 +32,7 @@ class HoldPolicy(unittest.TestCase):
     def test_invalid_settings_rejected(self):
         for values in ({"disinfection_target": 64}, {"disinfection_hold_minutes": 0},
                        {"disinfection_min_days": 17}, {"disinfection_timeout_hours": float("nan")},
-                       {"disinfection_sample_seconds": 1000},
+                       {"disinfection_sample_minutes": 1}, {"disinfection_sample_minutes": 500},
                        {"disinfection_timeout_hours": .25, "disinfection_hold_minutes": 20}):
             with self.assertRaises(ValueError):
                 policy.DisinfectionSettings(**values)
@@ -145,13 +143,38 @@ class TankBoundary(unittest.IsolatedAsyncioTestCase):
         await self.sample()
         self.assertEqual(self.dhw.status, "restoring")
 
+    async def test_steady_tank_is_not_stale(self):
+        await self.start()
+        await self.sample(55)
+        self.now += timedelta(minutes=20)
+        await self.controller.async_disinfection_tick()
+        self.assertEqual(self.dhw.status, "heating")
+        self.assertEqual(self.states["number.tank"].state, "68.0")
+
     async def test_stale_sensor_aborts_and_restores_without_success(self):
         await self.start()
         await self.sample()
-        self.now += timedelta(seconds=100)
+        self.now += timedelta(minutes=31)
         await self.controller.async_disinfection_tick()
         await self.controller.async_disinfection_tick()
         self.assertIsNone(self.dhw.last_success)
+        self.assertEqual(self.dhw.status, "failed")
+        self.assertEqual(self.states["number.tank"].state, "52.0")
+
+    async def test_brief_device_outage_waits_long_one_aborts(self):
+        await self.start()
+        await self.sample(55)
+        self.set_state("sensor.tank", "unavailable")
+        self.now += timedelta(minutes=1)
+        await self.controller.async_disinfection_tick()
+        self.assertIsNotNone(self.dhw.cycle)
+        self.assertEqual(len(self.writes()), 1)
+        await self.sample(55)
+        self.assertEqual(self.dhw.status, "heating")
+        self.set_state("sensor.tank", "unavailable")
+        self.now += timedelta(minutes=31)
+        await self.controller.async_disinfection_tick()
+        await self.controller.async_disinfection_tick()
         self.assertEqual(self.dhw.status, "failed")
         self.assertEqual(self.states["number.tank"].state, "52.0")
 

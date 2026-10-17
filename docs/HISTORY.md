@@ -393,3 +393,20 @@ the tank controller still flags the failed 11 October cycle. After the restart
 the main control mode came back as Observe and was set to Automatic again;
 tank and AC stay Observe, room target 22.0 °C, options unchanged (rise 6, fall
 10 °C/h). The first hour runs on the fallback curve as usual.
+
+### October 17 tank cycles survive a steady tank and link drops — 0.4.7
+
+Both manual disinfection runs on 17 October failed with "Tank temperature
+unavailable, stale, or invalid", like the one on 11 October. The 18:08 run
+failed 90 s in: the tank sat at 55.5–55.6 °C and the Versati sensor, which
+reports only on change, sent nothing for two minutes. The 15:54 run had
+heated the tank from 38 to 54.6 °C when every Versati entity went unavailable
+for about a minute at 16:56 (it did so again at 17:56); one unavailable tick
+aborted the run. The tank was fine both times. 0.4.7 replaces the 90-second
+`disinfection_sample_seconds` with `disinfection_sample_minutes` (default
+30, 5–120): a reading up to 30 minutes old is valid, the hold counts time while
+the latest reading is fresh and over the threshold, and a cycle waits through
+device unavailability up to the same limit. The stored 90-second value is
+ignored rather than migrated, at the owner's request. Above about 50 °C the
+tank climbs slowly on the electric heater; the 4-hour runtime limit is
+unchanged. 231 tests pass on Python 3.14.7 / HA 2026.7.4.
