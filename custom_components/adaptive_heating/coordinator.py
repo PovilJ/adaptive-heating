@@ -788,7 +788,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
             night_start=int(self.planner_settings.quiet_start_hour), warm_by=int(self.planner_settings.morning_hour),
             minimum_water=self.settings.minimum_water, maximum_water=self.settings.maximum_water,
             water_step=step if step and 0.5 <= step <= 2 else 1.0,
-            rise_step=self.settings.rise_per_hour * mpc.STEP_HOURS, fall_step=self.settings.fall_per_hour * mpc.STEP_HOURS)
+            rise_step=self.settings.rise_per_hour * mpc.STEP_HOURS, fall_step=self.settings.fall_per_hour * mpc.STEP_HOURS,
+            curve_slope=self.settings.curve_slope, curve_offset=self.settings.curve_offset)
         offset = dt_util.as_local(now).utcoffset()
         steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0,
                             self.sky(now)[2])
@@ -802,7 +803,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
         job = getattr(self.hass, "async_add_executor_job", None)
         plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
         self.plan_seed = plan.levels
-        boost = self.guard.update(snapshot["indoor"], steps[0].floor)
+        boost = self.guard.update(snapshot["indoor"], steps[0].floor, self.estimate.predicted)
         delivers = self.house.heat_kw(plan.water, self.estimate.slab) > 0
         running = bool(snapshot["floor_heating_active"])
         # Straight after hot water the loop still carries tank heat: the return and outlet

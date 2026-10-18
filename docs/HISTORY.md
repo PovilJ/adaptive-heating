@@ -425,3 +425,14 @@ tank run no longer drives the setpoint to 40 °C (17 October). Replays and the
 day-by-day test on real October data are in [PREDICTIVE.md](PREDICTIVE.md#050-the-house-learns-itself).
 250 tests pass on Python 3.14.7 / HA 2026.7.4. Not yet installed in the house.
 
+### October 18 0.5.0 installed; no 39 °C in mild weather — 0.5.1
+
+The owner installed 0.5.0 through HACS at 11:37. At 19:03, 8 °C outside, it
+asked for 39 °C after cooking and airing dropped the room from 22.9 to 21.5 °C
+within an hour and a half. 0.5.1 makes the drift term learn per hour of
+evidence instead of per update, limits how fast a surprise moves the slab
+estimate, lets the Guard climb only when the room is colder than the model
+predicted, and caps planned water at the heating curve + 5 °C. Details and
+replays in [PREDICTIVE.md](PREDICTIVE.md#051-no-39-c-in-mild-weather).
+251 tests pass on Python 3.14.7 / HA 2026.7.4.
+

@@ -451,3 +451,53 @@ What this shows and what it does not:
 Exposed on the status sensor under `learning`: heat loss, sun gains, minimum
 output, restart gap, resting outlet, logged half hours, recent start gaps, and
 the last refit's result with its before/after forecast error.
+
+## 0.5.1: no 39 °C in mild weather
+
+18 October, 19:03, 8 °C outside: the plan asked for 39 °C (38 sent). The
+owner: about 30 °C is enough in this weather; it would only take longer, and
+the floor should be caught before the room dips, not chased afterwards.
+
+What happened (status history, local time): the room was 22.9–23.1 °C and over
+its band all afternoon, correctly unheated. At 16:46 the thermometer jumped to
+24.9 °C in four minutes (cooking near it, most likely), then fell to 21.5 °C by
+17:55 (airing): 1.2 °C in 1.5 hours, faster than any floor. Three flaws turned
+that into 39 °C:
+
+- **The drift term learned per update, not per hour.** Mode toggles and
+  paused two-minute re-checks gave it a dozen updates in twenty minutes, and it
+  went from −0.017 to its −0.05 °C/h clamp (about 1 kW of imaginary loss). It
+  now learns from the room's rate of surprise, capped at 0.5 °C/h, weighted by
+  the hours of evidence. Replayed, it ends that evening at −0.03.
+- **The slab took the whole surprise.** The floor estimate fell 23.2 → 22.1 °C
+  with the airing. A surprise now moves the slab at most 0.6 °C per hour; the
+  rest is the room air and building, which the warm floor refills.
+- **The Guard stacked +1 °C a cycle on a plan that already saw the cold room**
+  (predicted 21.53, measured 21.5): +3. It now climbs only while the room is
+  also 0.15 °C below what the model predicted, that is, when the model is the
+  thing that is wrong.
+
+With all three fixed the plan alone still wanted 36–37 °C, and pulses to 38 °C
+later. The model takes a setpoint as continuous output; it cannot see the unit
+cycling itself around a moderate setpoint, so to it a steady 29 °C overheats
+the house and "off, then a hot pulse" looks cheapest. Hence a **weather
+ceiling**: every planned water stays under target + `curve_offset` +
+`curve_slope` × (target − outdoor) + 5 °C (`Comfort.ceiling_water`, from the
+configured heating curve; about 34 °C at 8 °C outside with the first house's
+0.5 offset, the 40 °C maximum from about −10 °C). The Guard may still go
+above it, since it now fires only when the model is wrong.
+
+Replay (`scripts/learning_replay.py`, learning on in both, `--old bd9535e`):
+
+| Plant, period | 0.5.0 kWh/day, h/day under band | ceiling +2 | ceiling +5 (0.5.1) | no ceiling |
+| --- | --- | --- | --- | --- |
+| first house, 1–16 Oct | 7.93, 0.3 | 7.89, 1.2 | 7.85, 0.4 | 7.86, 0.5 |
+| first house, 5–25 Mar | 15.92, 0.1 | 15.73, 0.3 | 15.95, 0.7 | 16.36, 1.9 |
+| other house, 1–16 Oct | 20.88, 0.7 | 19.30, 3.1 | 20.31, 1.1 | 21.00, 0.9 |
+| other house, 5–25 Mar | 42.76, 5.0 | 38.73, 8.8 | 40.75, 6.5 | 41.65, 6.7 |
+
+On the first house the hours under the band fall in the first five days,
+before the refit has the house; afterwards both ceilings give none. +2 left
+the leakier house cold every day (a fixed curve does not fit it), so +5.
+Replayed on 18 October's evening the plan becomes 33 °C now, a few hours at
+26–29 °C, then a steady 33 °C overnight, with no Guard boost.

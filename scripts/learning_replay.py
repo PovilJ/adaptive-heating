@@ -85,7 +85,10 @@ class Learning:
         result = m.plan(self.house, self.comfort, steps, self.estimate.state(self.house), self.estimate.bias, running, self.seed,
                         self.run_left, setpoint)
         self.seed = result.levels
-        boost = self.guard.update(room, steps[0].floor)
+        try:
+            boost = self.guard.update(room, steps[0].floor, self.estimate.predicted)
+        except TypeError:  # before the Guard compared with the prediction
+            boost = self.guard.update(room, steps[0].floor)
         delivers = self.house.heat_kw(result.water, self.estimate.slab) > 0
         if self.lift and not running:
             boosted = result.water + boost
@@ -132,6 +135,8 @@ def run(controller, plant, weather, start, end):
         hour = (when.hour + OFFSET) % 24
         night = hour >= 22 or hour < 7
         cold += (room < (21.5 if night else TARGET) - 0.3)
+        daily = getattr(controller, "daily", {}); controller.daily = daily
+        daily[when.date()] = daily.get(when.date(), 0) + (room < (21.5 if night else TARGET) - 0.3) * 0.5
         warm += room > TARGET + 0.5
         when += timedelta(minutes=30)
     days = total / 48
@@ -143,7 +148,9 @@ def run(controller, plant, weather, start, end):
 if __name__ == "__main__":
     weather = Weather(sys.argv[1])
     start, end = (datetime.fromisoformat(d).replace(tzinfo=timezone.utc) for d in sys.argv[2:4])
-    comfort = mpc.Comfort(target=TARGET, night_floor=21.5, rise_step=2.0, fall_step=5.0)
+    comfort = mpc.Comfort(target=TARGET, night_floor=21.5, rise_step=2.0, fall_step=5.0, curve_offset=0.5)  # first house's curve
+    if "--allowance" in sys.argv:
+        comfort = replace(comfort, curve_allowance=float(sys.argv[sys.argv.index("--allowance") + 1]))
     controllers = [Learning(comfort)]
     if "--ablate" in sys.argv:
         for name, kw in (("no refit", dict(refits=False)), ("no lift", dict(lift=False)), ("boost starts", dict(boost_starts=True))):
@@ -155,13 +162,16 @@ if __name__ == "__main__":
         path = Path(tempfile.mkdtemp()) / "mpc_old.py"; path.write_text(source)
         old = module("mpc_old", path)
         fields = {f for f in old.Comfort.__dataclass_fields__}
-        controller = Learning(old.Comfort(**{k: getattr(comfort, k) for k in fields}), old, learns=False, lift=False)
+        learns = hasattr(old, "start_level")  # 0.5.0 and later learn and lift like the integration
+        controller = Learning(old.Comfort(**{k: getattr(comfort, k) for k in fields}), old, learns=learns, lift=learns)
         controller.name = f"old {ref}"
         controllers.append(controller)
     for controller in controllers:
         began = time.time()
         plant = OTHER if "--other" in sys.argv else OCTOBER
         print(run(controller, plant, weather, start, end), f"| {time.time() - began:.0f}s", flush=True)
+        if "--daily" in sys.argv:
+            print("   hours under band by day:", [round(v, 1) for v in controller.daily.values()])
         for when, report in getattr(controller, "reports", []):
             if report.adopted or report.error_before:
                 print(f"   {when:%m-%d} {report.reason[:40]:40} rms {report.error_before or 0:.3f} -> {report.error_after or 0:.3f}"

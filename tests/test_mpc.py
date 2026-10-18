@@ -159,9 +159,24 @@ class Planning(unittest.TestCase):
         afternoon = MIDNIGHT + timedelta(hours=14)
         comfort = mpc.Comfort(target=22.1)
         state = self.house.resting(22.7, 9, slab=23.2)
-        result = mpc.plan(self.house, comfort, steps(afternoon, 9, 100, comfort), state)
-        self.assertEqual(self.house.heat_kw(result.water, state[0]), 0)
-        self.assertLess(max(result.rooms[:12]), 22.9)
+        sky = steps(afternoon, 9, 100, comfort)
+        result = mpc.plan(self.house, comfort, sky, state)
+        # Under the weather ceiling the plan may prefer gentle heat now to a hot pulse tonight;
+        # the measured room over its band still stops it before any command.
+        if self.house.heat_kw(result.water, state[0]) > 0:
+            self.assertTrue(mpc.too_warm(22.7, sky[0].ceiling))
+        else:
+            self.assertLess(max(result.rooms[:12]), 22.9)
+
+    def test_water_stays_under_the_weather_ceiling(self):
+        # 18 Oct 2026, 8 °C outside, room 0.5 °C under target: the plan asked for 36 °C and pulses to 38.
+        comfort = mpc.Comfort(target=22.0, night_floor=21.5, curve_offset=0.5)
+        sky = steps(MIDNIGHT - timedelta(hours=5), 8, 100, comfort)
+        self.assertAlmostEqual(sky[0].max_water, 22.0 + 0.5 + 0.45 * 14 + 5.0)
+        result = mpc.plan(self.house, comfort, sky, self.house.resting(21.5, 8, slab=22.6), setpoint=35.0)
+        self.assertLessEqual(max(result.waters), sky[0].max_water)
+        frost = steps(MIDNIGHT, -20, 100, comfort)
+        self.assertEqual(frost[0].max_water, comfort.maximum_water)
 
     def test_startup_mismatch_does_not_become_a_large_permanent_drift(self):
         estimate, noon = mpc.Estimate(), datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)

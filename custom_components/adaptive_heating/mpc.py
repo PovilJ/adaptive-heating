@@ -136,6 +136,17 @@ class Comfort:
     start_cost: float = 0.15    # kWh-equivalent per compressor start
     cycling_loss: float = 0.15  # extra electricity share when below minimum output
     sun_discount: float = 0.3   # electricity is this much cheaper under full sun (own PV)
+    # Weather-compensation ceiling: target + offset + slope × (target − outdoor) + allowance.
+    # The model takes a setpoint as continuous output and cannot see the unit cycling itself
+    # around a moderate one, so it chose "off, then a 35-39 °C pulse" where a steady ~30 °C
+    # was enough (18 Oct 2026, 8 °C outside). Hotter only recovers a little faster.
+    curve_slope: float = 0.45
+    curve_offset: float = 3.0
+    curve_allowance: float = 5.0  # +2 left a leakier house cold every day in replay
+
+    def ceiling_water(self, outdoor: float) -> float:
+        curve = self.target + self.curve_offset + self.curve_slope * max(0.0, self.target - outdoor) + self.curve_allowance
+        return min(self.maximum_water, max(self.minimum_water, curve))
 
     def floor(self, local_hour: float) -> float:
         night = (self.night_start <= local_hour or local_hour < self.warm_by) if self.night_start > self.warm_by \
@@ -150,6 +161,7 @@ class Step:
     floor: float
     ceiling: float
     price: float
+    max_water: float = math.inf
 
 
 NOWCAST_STEPS = 6  # measured sunshine fades into the forecast over three hours
@@ -185,7 +197,7 @@ def horizon(now: datetime, forecast: list[tuple[datetime, float, float | None]],
             sun = sunshine(at, latitude, longitude, cloud, share * clearness_now + (1 - share) * forecast_clear)
         local_hour = (at.astimezone(timezone.utc).hour + at.minute / 60 + local_offset_hours) % 24
         steps.append(Step(outdoor, sun, comfort.floor(local_hour), comfort.target + comfort.headroom,
-                          1 - comfort.sun_discount * min(1.0, sun[3] / 0.5)))
+                          1 - comfort.sun_discount * min(1.0, sun[3] / 0.5), comfort.ceiling_water(outdoor)))
     return steps
 
 
@@ -256,6 +268,13 @@ def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: 
     """Coordinate search over block water temperatures; small enough to run every cycle."""
     count = int(round((comfort.maximum_water - comfort.minimum_water) / comfort.water_step))
     choices = [comfort.minimum_water + i * comfort.water_step for i in range(count + 1)]
+    # Each block's water stays under the weather ceiling of its coldest step.
+    caps, at = [], 0
+    for size in BLOCKS:
+        caps.append(min([s.max_water for s in steps[at:at + size]] or [math.inf]))
+        at += size
+    allowed = [[c for c in choices if c <= cap + 1e-9] or [comfort.minimum_water] for cap in caps]
+    fit = lambda levels: [max(comfort.minimum_water, min(v, max(a))) for v, a in zip(levels, allowed)]
 
     def score(levels):
         return simulate(house, comfort, steps, expand(levels), state, bias, running, run_left, setpoint)[0]
@@ -266,9 +285,9 @@ def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: 
     hold = house.resting(comfort.target, coldest)[0] + house.dead + (
         house.loss * max(0.0, comfort.target - coldest) / house.heat / house.emit)
     hold = min(comfort.maximum_water, max(comfort.minimum_water, round(hold)))
-    starts = [[comfort.minimum_water] * len(BLOCKS), [hold] * len(BLOCKS)]
+    starts = [[comfort.minimum_water] * len(BLOCKS), fit([hold] * len(BLOCKS))]
     if seed and len(seed) == len(BLOCKS):
-        starts.append([min(comfort.maximum_water, max(comfort.minimum_water, v)) for v in seed])
+        starts.append(fit(seed))
     best, best_cost = None, math.inf
     for levels in starts:
         levels = list(levels)
@@ -276,7 +295,7 @@ def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: 
         for _ in range(4):
             improved = False
             for index in range(len(BLOCKS)):
-                for choice in choices:
+                for choice in allowed[index]:
                     if choice == levels[index]:
                         continue
                     trial = levels[:index] + [choice] + levels[index + 1:]
@@ -333,21 +352,32 @@ class Estimate:
         # room read 1 °C over target while the planner believed the house was at target and kept heating.
         drive = house.sun_east * sun[0] + house.sun_south * sun[1] + house.sun_west * sun[2]
         self.glow = min(6.0, max(0.0, state[2] + min(error, 0.5 * drive * hours)))
-        # Whatever the glow cannot absorb (it cannot go negative) is heat in the slab, and it stays.
-        self.slab = min(45.0, max(room - 1.0, state[0] + error - (self.glow - state[2])))
+        # Whatever the glow cannot absorb (it cannot go negative) is heat in the slab, and it stays,
+        # but no faster than a floor changes: 18 Oct 2026, cooking then airing moved the room
+        # 2.4 °C in minutes, and the slab estimate fell a degree with it.
+        limit = 0.6 * max(hours, 0.25)
+        self.slab = min(45.0, max(room - 1.0, state[0] + max(-limit, min(limit, error - (self.glow - state[2])))))
         # The drift term is for errors that persist for days. Learned quickly, a start-up
-        # mismatch became 4 kW of imaginary heat loss and a night of 38 °C water.
-        self.bias = min(0.05, max(-0.05, self.bias + 0.02 * error / max(hours, 0.25)))
+        # mismatch became 4 kW of imaginary heat loss and a night of 38 °C water. It learns per
+        # hour of evidence, not per update: on 18 Oct a dozen updates in twenty minutes (mode
+        # toggles, paused re-checks) took it to its clamp, and the plan asked for 39 °C.
+        rate = max(-0.5, min(0.5, error / max(hours, 0.25)))
+        self.bias = min(0.05, max(-0.05, self.bias + 0.04 * rate * min(hours, 0.5)))
         self.room, self.at, self.predicted = room, now, predicted
 
 
 @dataclass
 class Guard:
-    """Safety net for a wrong model: a room left under its band gets hotter water each cycle until it is back."""
+    """Safety net for a wrong model: a room left under its band gets hotter water each cycle until it is back.
+
+    It climbs only while the room also falls short of what the model predicted. When
+    the model already sees the cold room, the plan has accounted for it, and adding
+    1 °C a cycle on top only wound the water up (18 Oct 2026: +3 on a plan of 36 °C).
+    """
     boost: float = 0.0
 
-    def update(self, room: float, floor: float) -> float:
-        if room < floor - 0.2:
+    def update(self, room: float, floor: float, predicted: float | None = None) -> float:
+        if room < floor - 0.2 and (predicted is None or room < predicted - 0.15):
             self.boost = min(6.0, self.boost + 1.0)
         elif room >= floor:
             self.boost = max(0.0, self.boost - 1.0)
