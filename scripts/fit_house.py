@@ -6,21 +6,17 @@ DATA_DIR holds lts.json (HA hourly statistics: room, heat-pump electricity),
 meteo.json (Open-Meteo hourly {time: [temperature, cloud %, ...]}) and loc.json.
 """
 import importlib.util, json, math, sys
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("mpc", ROOT / "custom_components/adaptive_heating/mpc.py")
 mpc = importlib.util.module_from_spec(spec); sys.modules["mpc"] = mpc; spec.loader.exec_module(mpc)
+spec = importlib.util.spec_from_file_location("learn", ROOT / "custom_components/adaptive_heating/learn.py")
+learn = importlib.util.module_from_spec(spec); sys.modules["learn"] = learn; spec.loader.exec_module(learn)
 
-STANDBY_KW = 0.04
-# Fitted as physical quantities, then converted: kW/°C lost outdoors, kWh/°C of slab,
-# kW/°C slab-to-building, kWh/°C of building, sun glow °C/h per kW/m², glow fade 1/h,
-# share of glow kept by the building, kW of gains.
-PHYSICAL = ("ua", "slab", "couple", "building", "east", "south", "west", "fade", "keep", "gains", "mix")
-LOW = (0.05, 2, 0.2, 2, 0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0)
-HIGH = (0.5, 80, 4.0, 150, 30, 30, 30, 2.0, 1.0, 1.5, 0.9)
+STANDBY_KW = learn.STANDBY_KW
+PHYSICAL, LOW, HIGH = learn.PHYSICAL, learn.LOW, learn.HIGH
 
 
 def load(folder, start="2026-01-10", end="2026-05-10", extra=("2026-10-08", "2026-10-11")):
@@ -87,41 +83,16 @@ def error(house, runs, detail=False, hours=None):
     return total / max(count, 1)
 
 
-def nelder_mead(f, x, scale, rounds=4000):
-    n = len(x)
-    simplex = [list(x)] + [[v + (scale[i] if i == j else 0) for i, v in enumerate(x)] for j in range(n)]
-    values = [f(p) for p in simplex]
-    for _ in range(rounds):
-        order = sorted(range(n + 1), key=values.__getitem__)
-        simplex, values = [simplex[i] for i in order], [values[i] for i in order]
-        if values[-1] - values[0] < 1e-9:
-            break
-        centre = [sum(p[i] for p in simplex[:-1]) / n for i in range(n)]
-        point = lambda t: [c + t * (c - w) for c, w in zip(centre, simplex[-1])]
-        reflected = point(1); fr = f(reflected)
-        if fr < values[0]:
-            expanded = point(2); fe = f(expanded)
-            simplex[-1], values[-1] = (expanded, fe) if fe < fr else (reflected, fr)
-        elif fr < values[-2]:
-            simplex[-1], values[-1] = reflected, fr
-        else:
-            contracted = point(-0.5); fc = f(contracted)
-            if fc < values[-1]:
-                simplex[-1], values[-1] = contracted, fc
-            else:
-                simplex = [simplex[0]] + [[(a + b) / 2 for a, b in zip(simplex[0], p)] for p in simplex[1:]]
-                values = [values[0]] + [f(p) for p in simplex[1:]]
-    return simplex[0], values[0]
+# The integration refits itself nightly with the same pieces (custom_components/adaptive_heating/learn.py).
+nelder_mead = learn.nelder_mead
+
+
+def house_from(x):
+    return learn.house_from(x, mpc.House())
 
 
 def physical(x):
     return [low + (high - low) / (1 + math.exp(-v)) for v, low, high in zip(x, LOW, HIGH)]
-
-
-def house_from(x):
-    ua, slab, couple, building, east, south, west, fade, keep, gains, mix = physical(x)
-    return replace(mpc.House(), heat=1 / slab, release=couple / slab, warm=couple / building, loss=ua / building,
-                   sun_east=east, sun_south=south, sun_west=west, sun_fade=fade, sun_keep=keep, gains=gains / building, mix=mix)
 
 
 if __name__ == "__main__":

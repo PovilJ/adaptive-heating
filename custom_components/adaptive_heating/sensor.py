@@ -89,5 +89,6 @@ class HeatingSensor(HeatingEntity, SensorEntity):
                     "estimated_sun_glow_celsius": (self.coordinator.data or {}).get("sun_glow"),
                     "model_bias_celsius_per_hour": (self.coordinator.data or {}).get("model_bias"),
                     "predicted_room_last_cycle": (self.coordinator.data or {}).get("predicted_room"),
-                    "restart_required": self.coordinator.releases.restart_pending}
+                    "restart_required": self.coordinator.releases.restart_pending,
+                    "learning": self.coordinator.learning_attributes()}
         return None

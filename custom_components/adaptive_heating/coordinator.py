@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -21,7 +21,7 @@ from .disinfection_controller import DisinfectionController
 from .ac_controller import ACController, DEFAULTS as AC_DEFAULTS
 from .engine import Energy, Model, Recovery, Settings, clamp, cooling_trend, decide, finite, limited_output, power_watts, surplus_available, temperature
 from .planner import DEFAULTS as PLAN_DEFAULTS, CooldownModel, ForecastPoint, PlannerSettings, decide_plan
-from . import mpc
+from . import learn, mpc
 
 _LOGGER = logging.getLogger(__name__)
 # Revision 3: night-window learning. Older stored counts are not comparable.
@@ -77,6 +77,15 @@ class HeatingCoordinator(DataUpdateCoordinator):
         self.forecast_cache = []
         self.forecast_rows = []
         self.house = mpc.House()
+        self.log = learn.Log()  # half-hour record the house is refitted from each night
+        self.learn_store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.learning")
+        self.fit_report = None
+        self.refitting = False
+        self.start_gaps = []  # setpoint − outlet when an idle compressor started
+        self.hot_water_at = None  # last moment the unit was seen heating the tank
+        self.in_hot_water = False
+        self.pv_scale = None
+        self.meter = None  # (time, kWh) at the estimator's last update, for measured heat
         self.estimate = mpc.Estimate()
         self.guard = mpc.Guard()
         self.plan_seed = None
@@ -118,6 +127,16 @@ class HeatingCoordinator(DataUpdateCoordinator):
             self.estimate = mpc.Estimate(**data.get("estimate2", {}))
         except TypeError:
             self.estimate = mpc.Estimate()
+        learned = await self.learn_store.async_load() or {}
+        if learned.get("identity") == self.identity():
+            self.house = learn.house_from_dict(learned.get("house"), mpc.House())
+            self.log = learn.Log.restore(learned.get("log"))
+            self.start_gaps = [g for g in learned.get("start_gaps", []) if finite(g) is not None][-20:]
+            try:
+                self.fit_report = learn.Report(**learned["report"]) if learned.get("report") else None
+            except TypeError:
+                self.fit_report = None
+            self.pv_scale = learn.pv_scale(self.log.rows)
         # Observe on every restart/reconfiguration, regardless of stored mode.
         await self.disinfection.async_load()
         await self.ac.async_load()
@@ -127,6 +146,27 @@ class HeatingCoordinator(DataUpdateCoordinator):
                                     "model": asdict(self.model), "target": self.settings.target,
                                     "configured_target": self.config["target"], "cooldown": self.cooldown.to_dict(),
                                     "cooldown_regime": self.cooldown_regime(), "estimate2": asdict(self.estimate)})
+
+    def learning_data(self):
+        return {"identity": self.identity(), "house": learn.house_to_dict(self.house), "log": self.log.to_dict(),
+                "start_gaps": self.start_gaps, "report": asdict(self.fit_report) if self.fit_report else None}
+
+    def save_learning(self):
+        self.learn_store.async_delay_save(self.learning_data, 60)
+
+    def hot_water_recent(self, now, minutes=30):
+        return self.hot_water_at is not None and 0 <= (now - self.hot_water_at).total_seconds() <= minutes * 60
+
+    def sky(self, now):
+        """Forecast cloud now, PV per unit of clear-sky sun, and the clearness that makes."""
+        cloud = next((c for t, _, c in sorted(self.forecast_rows) if t >= now - timedelta(hours=1)), None)
+        place = self.location()
+        pv = self.reading("pv_entity", now, "power") if self.config.get("pv_entity") else None
+        if place is None or pv is None:
+            return cloud, None, None
+        clear = mpc.sunshine(now, *place, None, 1.0)[3]
+        ratio = pv / clear if clear > 0.1 else None
+        return cloud, ratio, learn.clearness(ratio, self.pv_scale)
 
     def seed_from_legacy(self):
         """Start once from the loss/gain the original PyScript learned, if its helpers remain."""
@@ -269,10 +309,19 @@ class HeatingCoordinator(DataUpdateCoordinator):
             return None
         phase = phase_for(state)
         if entity_id == self.config.get("operating_entity"):
+            hot = state is not None and state_matches(state, self.config["disinfection_hot_water_state"])
+            if hot or self.in_hot_water:
+                self.hot_water_at = now
+            self.in_hot_water = hot
             # Starts are the operating state entering heating; a defrost pause or a lost
             # reading inside a run is not a new start.
             if phase and self.run_started is None:
                 self.run_started = now
+                # How far above the resting outlet the setpoint stood when the unit chose to start.
+                setpoint, outlet = self.reading("output_entity", now), self.reading("outlet_entity", now)
+                if (setpoint is not None and outlet is not None and not self.hot_water_recent(now, 20)
+                        and 0 < setpoint - outlet <= 15):
+                    self.start_gaps = (self.start_gaps + [round(setpoint - outlet, 2)])[-20:]
             elif phase is False:
                 self.run_started = None
         if entity_id == self.config.get("defrost_entity"):
@@ -548,6 +597,7 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 self.previous = None
                 self.model.emitter = None
             self.observe_house(now, snapshot)
+            self.record(now, snapshot, ac_active)
             result.update(floor_estimate=self.estimate.slab, sun_glow=self.estimate.glow, model_bias=self.estimate.bias,
                           predicted_room=self.estimate.predicted)
             result.update(indoor=snapshot["indoor"], outdoor=snapshot["outdoor"], actual=snapshot["output"],
@@ -644,12 +694,85 @@ class HeatingCoordinator(DataUpdateCoordinator):
         place = self.location()
         if place is None or not snapshot["thermal_valid"]:
             return
-        cloud = next((c for t, _, c in sorted(self.forecast_rows) if t >= now - timedelta(hours=1)), None)
+        cloud, _, clearness = self.sky(now)
         duty = snapshot["compressor_on_fraction"]
         if duty is None:
             duty = 1.0 if snapshot["floor_heating_active"] else 0.0
+        # Heat from the electricity meter when a whole interval of it went to the floor;
+        # the emitter model's guess otherwise. Short (paused) intervals are below the meter's resolution.
+        energy = self.reading("electric_energy_entity", now, "energy")
+        measured = None
+        if self.meter is not None and energy is not None and self.estimate.at is not None:
+            began, used = self.meter
+            hours = (now.timestamp() - began) / 3600
+            if (abs(began - self.estimate.at) < 1 and 0.3 <= hours <= 2 and 0 <= energy - used < 20 * hours
+                    and not self.hot_water_recent(now, hours * 60 + 5) and not self.ac.blocks_learning(now)):
+                measured = max(0.0, (energy - used) / hours - learn.STANDBY_KW) * self.house.cop(
+                    snapshot["output"] if snapshot["output"] is not None else snapshot["indoor"] + 5, snapshot["outdoor"])
+        before = self.estimate.at
         self.estimate.update(self.house, now.timestamp(), snapshot["indoor"], snapshot["outdoor"],
-                             snapshot["output"], duty, mpc.sunshine(now, *place, cloud))
+                             snapshot["output"], duty, mpc.sunshine(now, *place, cloud, clearness), measured)
+        if self.estimate.at != before:
+            self.meter = (self.estimate.at, energy) if energy is not None else None
+
+    def record(self, now, snapshot, ac_active):
+        """Log this cycle for the nightly refit, and start the refit when it is due."""
+        operating = self.fresh_state("operating_entity", now)
+        if operating is not None and state_matches(operating.state, self.config["disinfection_hot_water_state"]):
+            self.hot_water_at = now
+        cloud, ratio, _ = self.sky(now)
+        floor_heat = (snapshot["floor_heating_active"] is not None and not ac_active
+                      and not self.hot_water_recent(now, 35) and not self.disinfection.blocks_heating)
+        closed = self.log.add(now=now.timestamp(), room=snapshot["indoor"], outdoor=snapshot["outdoor"],
+            energy_kwh=self.reading("electric_energy_entity", now, "energy"), cloud=cloud, pv_ratio=ratio,
+            setpoint=snapshot["output"], slab=self.estimate.slab, outlet=self.reading("outlet_entity", now),
+            duty=snapshot["compressor_on_fraction"], floor_heat=floor_heat, cop_water=snapshot["output"], house=self.house)
+        if closed:
+            self.save_learning()
+        place = self.location()
+        last = self.fit_report.at if self.fit_report else None
+        # Once a night, in the small hours; the first time as soon as there is enough to try.
+        due = (last is None or now.timestamp() - last >= 20 * 3600) and (last is None or dt_util.as_local(now).hour == 3)
+        create = getattr(self.hass, "async_create_background_task", None)
+        if due and create and not self.refitting and place is not None and not self.shutting_down:
+            self.refitting = True
+            create(self.async_refit(now, place), f"{DOMAIN} refit")
+
+    async def async_refit(self, now, place):
+        try:
+            house, report = await self.hass.async_add_executor_job(
+                learn.refit, self.house, list(self.log.rows), place, now.timestamp(), list(self.start_gaps))
+            async with self.lock:
+                if report.adopted:
+                    # The drift term was compensating for the old values.
+                    self.estimate.bias = 0.0
+                self.house, self.fit_report = house, report
+                self.pv_scale = learn.pv_scale(self.log.rows)
+                self.save_learning()
+            _LOGGER.info("House refit: %s", report.reason)
+        except Exception:  # noqa: BLE001 - learning must never stop control
+            _LOGGER.exception("House refit failed; keeping the current values")
+            self.fit_report = learn.Report(now.timestamp(), len(self.log.rows), 0, reason="Refit failed; see the log")
+        finally:
+            self.refitting = False
+
+    def learning_attributes(self):
+        house = self.house
+        report = self.fit_report
+        return {
+            "heat_loss_kw_per_celsius": round(learn.physical_of(house)[0], 3),
+            "sun_gain_east_south_west": [round(house.sun_east, 2), round(house.sun_south, 2), round(house.sun_west, 2)],
+            "minimum_output_kw": round(house.q_min, 2),
+            "restart_gap_celsius": round(house.restart_gap, 2),
+            "idle_outlet_above_floor_celsius": round(house.idle_offset, 2),
+            "logged_half_hours": len(self.log.rows),
+            "logged_with_measured_heat": sum(1 for r in self.log.rows if r.heat is not None),
+            "observed_start_gaps": self.start_gaps[-10:],
+            "last_refit": datetime.fromtimestamp(report.at, timezone.utc).isoformat(timespec="minutes") if report else None,
+            "last_refit_result": report.reason if report else "Not yet: needs three days of logged data",
+            "forecast_error_before_celsius": round(report.error_before, 3) if report and report.error_before else None,
+            "forecast_error_after_celsius": round(report.error_after, 3) if report and report.error_after else None,
+        }
 
     async def predictive_plan(self, now, snapshot):
         """Cheapest water schedule that keeps the room in its band; None falls back to the heating curve."""
@@ -667,7 +790,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
             water_step=step if step and 0.5 <= step <= 2 else 1.0,
             rise_step=self.settings.rise_per_hour * mpc.STEP_HOURS, fall_step=self.settings.fall_per_hour * mpc.STEP_HOURS)
         offset = dt_util.as_local(now).utcoffset()
-        steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0)
+        steps = mpc.horizon(now, rows, comfort, *place, snapshot["outdoor"], offset.total_seconds() / 3600 if offset else 0.0,
+                            self.sky(now)[2])
         # A run we started keeps going for its first hour: a start costs more than half an hour saves.
         minutes = ((now - self.run_started).total_seconds() / 60
                    if self.run_started is not None and snapshot["floor_heating_active"] else None)
@@ -679,8 +803,23 @@ class HeatingCoordinator(DataUpdateCoordinator):
         plan = await job(mpc.plan, *arguments) if job else mpc.plan(*arguments)
         self.plan_seed = plan.levels
         boost = self.guard.update(snapshot["indoor"], steps[0].floor)
-        wants_heat = boost > 0 or self.house.heat_kw(plan.water, self.estimate.slab) > 0
-        held = mpc.keep_running(plan.water + boost, wants_heat or run_left > 0, self.reading("inlet_entity", now))
+        delivers = self.house.heat_kw(plan.water, self.estimate.slab) > 0
+        running = bool(snapshot["floor_heating_active"])
+        # Straight after hot water the loop still carries tank heat: the return and outlet
+        # read 38 °C and say nothing about the floor (a 40 °C request on 17 Oct 2026).
+        hot_loop = self.hot_water_recent(now)
+        if running:
+            wants_heat = boost > 0 or delivers
+            held = mpc.keep_running(plan.water + boost, wants_heat or run_left > 0,
+                                    None if hot_loop else self.reading("inlet_entity", now))
+        else:
+            # Only a water the model itself expects to start the unit is lifted clear of the outlet.
+            # Lifting every Guard boost into a start cost 4 % more electricity in replay for no comfort.
+            boosted = plan.water + boost
+            wants_heat = (self.house.heat_kw(boosted, self.estimate.slab) > 0
+                          and self.house.starts(boosted, self.estimate.slab))
+            held = mpc.start_level(boosted, wants_heat, None if hot_loop else self.reading("outlet_entity", now),
+                                   self.house.restart_gap)
         if run_left > 0:  # lowering the setpoint mid-run is what stopped the unit after half an hour
             held = max(held, snapshot["output"])
         # Safety net for a wrong model on the warm side, as the Guard is on the cold side.
@@ -696,7 +835,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
         if not warm and run_left > 0 and not wants_heat:
             reason += "; kept running until the compressor has run an hour"
         elif not warm and held > plan.water + boost:
-            reason += "; held above the return water so the compressor keeps running"
+            reason += ("; held above the return water so the compressor keeps running" if running
+                       else "; raised clear of the outlet so the compressor starts")
         hourly = [{"at": (now + timedelta(hours=i / 2 + 0.5)).isoformat(timespec="minutes"),
                    "water": plan.waters[i], "room": round(plan.rooms[i], 2), "floor": steps[i].floor}
                   for i in range(1, 48, 2)]

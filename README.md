@@ -276,6 +276,15 @@ daylight intervals cannot establish a fit. Learning compares the room with itsel
 2–3 hours earlier at night in small capped steps, so it takes nights, not hours.
 The fitted loss remains empirical: internal gains can bias it. Predictions include the water ramp before slow floor response.
 
+The predictive planner (on by default) learns its house as well. It logs every
+half hour for four weeks and refits heat loss and sun gain each night at 03:00,
+keeping a refit only when it forecasts the last two days better. It measures
+the heat pump's minimum output and restart gap from what the unit actually
+does, and uses metered electricity and, when mapped, PV output as measured
+heat and sunshine. A new or remapped house starts from the defaults and
+settles within a few days; the status sensor's `learning` attribute shows what
+it has learned. See [docs/PREDICTIVE.md](docs/PREDICTIVE.md).
+
 Ordinary forecast preparation also works while the model learns. A sustained cold
 drop within the floor-response and water-ramp lead raises the weather curve;
 a single cold forecast point cannot do so. Room cooling is estimated from at

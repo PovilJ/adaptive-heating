@@ -1,5 +1,6 @@
 """The predictive planner: the house model, the plan search and their safety nets."""
 from dataclasses import replace
+import math
 from datetime import datetime, timedelta, timezone
 import unittest
 
@@ -77,10 +78,40 @@ class Planning(unittest.TestCase):
         state, sky = self.house.resting(22.0, 8), steps(MIDNIGHT, 8, 90, self.comfort)
         half_hour = self.house.heat_kw(31, state[0]) / self.house.cop(31, 8) * mpc.STEP_HOURS
         once = mpc.simulate(self.house, self.comfort, sky, [31] + [25] * 71, state)[2]
-        self.assertGreater(once, 1.6 * half_hour)  # 14 October: 29-35 minute runs, 25 minutes apart
+        # 14 October: 29-35 minute runs, 25 minutes apart. The second half hour runs at minimum output.
+        second = self.house.q_min / self.house.cop(25, 8) * mpc.STEP_HOURS
+        self.assertAlmostEqual(once, half_hour + second, places=3)
         held = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True, run_left=1)
         free = mpc.simulate(self.house, self.comfort, sky, [25] * 72, state, running=True)
         self.assertGreater(held[1][3], free[1][3] + 0.005)  # the run under way still heats its last half hour
+
+    def test_an_idle_compressor_starts_only_past_its_restart_gap(self):
+        # 11-18 Oct 2026: no start came with the setpoint under the outlet + 4.5 °C.
+        state, sky = self.house.resting(21.0, 8), steps(MIDNIGHT, 8, 90, self.comfort)
+        start = state[0] + self.house.idle_offset + self.house.restart_gap
+        self.assertEqual(mpc.simulate(self.house, self.comfort, sky, [math.floor(start - 0.5)] * 4 + [25] * 68, state)[2], 0.0)
+        self.assertGreater(mpc.simulate(self.house, self.comfort, sky, [math.ceil(start)] * 4 + [25] * 68, state)[2], 0.0)
+        # Minimum water is off until the floor itself cools under 25 °C less the gap, as on the unit.
+        cold = self.house.resting(18.0, -10)
+        frost = mpc.simulate(self.house, self.comfort, steps(MIDNIGHT, -10, 90, self.comfort), [25] * 72, cold)
+        self.assertGreater(frost[2], 0.0)
+        # Running, it keeps going at setpoints that could not have started it.
+        self.assertGreater(mpc.simulate(self.house, self.comfort, sky, [29] * 72, state, running=True)[2], 0.0)
+
+    def test_a_start_is_commanded_clear_of_the_outlet(self):
+        self.assertEqual(mpc.start_level(27, True, 24.3, 4.6), 29)
+        self.assertEqual(mpc.start_level(31, True, 24.3, 4.6), 31)
+        self.assertEqual(mpc.start_level(27, False, 24.3, 4.6), 27)
+        self.assertEqual(mpc.start_level(27, True, None, 4.6), 27)
+
+    def test_measured_sky_replaces_the_forecast_for_the_next_hours(self):
+        noon = datetime(2026, 10, 17, 9, 0, tzinfo=timezone.utc)
+        rows = [(noon + timedelta(hours=h), 10, 100) for h in range(40)]
+        cloudy = mpc.horizon(noon, rows, self.comfort, *PLACE, 10, 3.0)
+        sunny = mpc.horizon(noon, rows, self.comfort, *PLACE, 10, 3.0, clearness_now=1.0)
+        self.assertGreater(sunny[0].sun[1], 2.5 * cloudy[0].sun[1])
+        self.assertGreater(sunny[0].sun[1] - cloudy[0].sun[1], sunny[4].sun[1] - cloudy[4].sun[1])
+        self.assertEqual(sunny[mpc.NOWCAST_STEPS].sun, cloudy[mpc.NOWCAST_STEPS].sun)
 
     def test_the_plan_knows_the_setpoint_only_falls_a_degree_per_half_hour(self):
         state, sky = self.house.resting(22.0, 8), steps(MIDNIGHT, 8, 90, self.comfort)

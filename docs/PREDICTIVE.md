@@ -171,10 +171,11 @@ return sensor; compare the two in the live data.
 
 ## Known limits
 
-- Model values are code defaults for one house, not learned online. Only the
-  slab, glow and drift are estimated live.
-- Sunshine comes from forecast cloud cover; measured PV output is not yet used
-  as a nowcast, and export pricing is unknown, so the solar discount is a guess.
+- Since 0.5.0 heat loss, east and south sun gain and the heat pump's own
+  values are learned nightly (see "0.5.0" below). The slab and building
+  masses, glow fade and the emitter line stay at the first house's values
+  until data can tell them apart.
+- Export pricing is unknown, so the solar discount is a guess.
 - No tariff input: electricity is one price apart from the daylight discount.
 - Hot water electricity is inside the fitted heat (a few percent).
 - The planner's coarse far blocks are imprecise; only the first step is acted on.
@@ -332,3 +333,121 @@ the band in replay. The replay charges nothing for a start, so the true balance
 is closer than that; at 0.3 kWh per start the October difference would roughly
 cancel. Recommended for the first house: rise 4 °C/h (+2 per half hour, as the
 PyScript), fall unchanged at 10 °C/h.
+
+## 0.5.0: the house learns itself
+
+Asked on 18 October: the house's numbers should not be one fixed rule; they
+should drift with the season and set themselves up on another house. Until
+0.5.0 `mpc.House` was a one-off offline fit (January–May plus 8–10 October),
+and the only live correction was a drift term clamped at ±0.05 °C/h. On 18
+October that term sat at −0.044: the house was losing more heat than the model
+believed.
+
+### What is learned, and how
+
+- **A log** ([`learn.Log`](../custom_components/adaptive_heating/learn.py)):
+  every control interval the coordinator records room, outdoor, forecast cloud,
+  PV, setpoint, outlet, compressor duty, the slab estimate and the heat
+  delivered. Heat comes from the electricity meter × the modelled COP. An
+  interval with hot water (and the 35 minutes after it), AC or an unknown
+  operating state has unknown heat but still logs the room. Four weeks are kept
+  in a separate store (`adaptive_heating.<entry>.learning`), reset when the
+  entity mapping changes: a different house starts from the defaults again.
+- **A nightly refit** at 03:00 local, in the executor (under a second on a laptop for ten days of log, a few seconds on a small HA host for four weeks):
+  heat loss and the east, south and west sun gains are fitted to 24-hour
+  roll-outs of the log, pulled toward the values in use. The refit is fitted
+  on all but the last 48 hours and adopted only if it forecasts those 48 hours
+  at least 3 % better; the drift term then restarts at zero.
+- **The heat pump's own values**, measured directly from the log on the same
+  night: minimum output (10th percentile of full-run heat), the outlet's
+  height above the slab at rest, and the **restart gap** — how far the setpoint
+  must stand above the resting outlet before an idle compressor starts — from
+  the starts the coordinator sees (the second smallest of the last 20 gaps;
+  starts straight out of hot water are skipped). On the Versati this is its
+  `delta_heat_temp_set` (5 °C): in a week of history no start came with the
+  setpoint under outlet + 4.5 °C.
+- **Measured heat in the live estimate**: each 30-minute estimator step uses
+  the meter's heat instead of the emitter model's guess when the whole interval
+  went to the floor.
+- **PV as the sky**: PV watts per unit of clear-sky sun, scaled by the 90th
+  percentile seen in the log, gives a measured clearness. It replaces forecast
+  cloud in the estimator and the log, and the plan's first three hours start
+  from it and blend into the forecast (`mpc.horizon(clearness_now=…)`).
+
+Slab and building masses, glow fade and the emitter line stay at the first
+house's values. Ten days of real October data, refitted day by day and scored
+on the following two days (`.local` replay of the live history through
+`learn.Log`):
+
+| Fitted values | next-48 h forecast rms | mean bias |
+| --- | --- | --- |
+| none (0.4.7) | 0.388 °C | +0.14 °C (room predicted too warm) |
+| all eleven | 0.44–0.60 °C | — |
+| loss + sun (0.5.0) | 0.353 °C | −0.05 °C |
+
+All eleven free cannot tell slab from building in mild weather and forecast
+worse; loss and sun alone removed the bias. The October first house loses
+0.19–0.20 kW/°C against the winter fit's 0.14. A full-run emitter line was
+rejected: full runs gave 4.5–6 kW almost whatever the setpoint, so only the
+minimum output (3.7–3.8 kW, the code assumed 3) is learned.
+
+### The heat pump's restart rule in the plan
+
+`House.starts`: an idle compressor heats only when the setpoint reaches slab +
+`idle_offset` + `restart_gap`. Without it the model counted heat from 26–28 °C
+ramps the unit ignored (17 October 04:53–05:53: 26, 28 °C requested, nothing
+started until 30 °C) and believed 25 °C restarted the floor whenever the slab
+fell under about 21 °C. When the plan starts the idle unit, the command is
+lifted to the measured outlet + gap (`mpc.start_level`). A Guard boost alone
+is not lifted into a start: that cost 4 % more electricity in replay for no
+comfort.
+
+### After hot water
+
+Straight after a tank run the loop still carries tank heat: on 17 October at
+07:11 the return read 38 °C and the keep-running lift asked for 40 °C (35 °C
+after the rise limit; that run's COP was 2.8). For 30 minutes after hot water
+the return and outlet are now ignored by the lifts. The hot-water time is when
+it was last seen, not when it began.
+
+### Replay
+
+`python3 scripts/learning_replay.py DATA_DIR START END --old 7f6fac1 [--other]`:
+the controller starts from the defaults, logs and refits nightly against a
+plant it does not know — the first house as October measured it (loss 0.195,
+sun east 1.26 / south 1.71, restart gap 4.5, minimum 3.8 kW), or with
+`--other` a different house (twice the loss, a slab 1.5× heavier, sun from the
+west, a 3 °C gap). Old is 0.4.7, which does not learn.
+
+| Plant, period | kWh/day old → new | h/day under band | h/day over target + 0.5 | starts/day |
+| --- | --- | --- | --- | --- |
+| first house, 1–16 Oct | 7.73 → 7.93 | 0.1 → 0.3 | 5.4 → 6.5 | 1.7 → 1.3 |
+| first house, 5–25 Mar | 15.76 → 15.92 | 0.5 → 0.1 | 7.8 → 8.5 | 1.6 → 1.4 |
+| first house, 15 Jan–4 Feb | 65.99 → 66.33 | 3.6 → 3.7 | 1.4 → 1.6 | 0.8 → 0.9 |
+| other house, 1–16 Oct | 20.32 → 20.88 | 1.9 → 0.7 | 4.4 → 4.5 | 2.5 → 1.9 |
+| other house, 5–25 Mar | 41.63 → 42.76 | 7.6 → 5.0 | 7.0 → 7.8 | 1.1 → 1.0 |
+
+Learned within three days: loss 0.194–0.199 (plant 0.195) and 0.39–0.40
+(plant 0.42), restart gap 4.5–4.6 (4.5) and 3.1–3.2 (3.0), west sun 2.2–2.4
+(2.0) on the other house. The other house in January is left out: its loss
+exceeds the 9 kW unit and both versions end near 13 °C.
+
+What this shows and what it does not:
+
+- The learning finds a house it was not told about, and on a house unlike the
+  defaults it more than halves the hours under the band.
+- On the first house it costs 0.3–2.6 % more electricity in replay. The old
+  planner, believing a tighter house, asked for heat the plant then ignored
+  (9 setpoints a day in October) and got away with it; the new one delivers
+  what it plans. Without the nightly refit the restart-aware planner was
+  clearly worse (9.0 kWh/day, 2 h/day under the band in October): the two
+  belong together.
+- The replay plant is the model family itself, with forecast cloud as the sky:
+  it cannot show what PV nowcasting, measured heat in the estimator or the
+  after-hot-water fix do on the real house. Those show live: watch
+  `learning.last_refit_result`, `model_bias_celsius_per_hour` (should stay
+  near 0 now) and sunny mornings like 17 October.
+
+Exposed on the status sensor under `learning`: heat loss, sun gains, minimum
+output, restart gap, resting outlet, logged half hours, recent start gaps, and
+the last refit's result with its before/after forecast error.

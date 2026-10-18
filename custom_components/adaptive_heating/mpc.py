@@ -44,11 +44,17 @@ class House:
     dead: float = 1.8         # °C of water above the slab that delivers nothing (thermostat hysteresis)
     q_max: float = 9.0        # kW
     q_min: float = 3.0        # kW; below this the compressor cycles
+    idle_offset: float = 2.8  # °C the outlet sits above the slab while the compressor rests
+    restart_gap: float = 5.0  # °C the setpoint must exceed the resting outlet before the compressor starts
     cop_eta: float = 0.42     # fraction of the Carnot limit
     cop_lift: float = 8.0     # °C of exchanger temperature difference
 
     def cop(self, water: float, outdoor: float) -> float:
         return min(7.0, max(1.5, self.cop_eta * (water + 273.15) / max(5.0, water - outdoor + self.cop_lift)))
+
+    def starts(self, water: float, slab: float) -> bool:
+        """An idle compressor starts only when the setpoint clears the resting outlet by the unit's own gap."""
+        return water >= slab + self.idle_offset + self.restart_gap
 
     def heat_kw(self, water: float, slab: float) -> float:
         """Average heat for this setpoint. A setpoint barely above the return water stops the compressor:
@@ -93,11 +99,12 @@ def sun_position(when: datetime, latitude: float, longitude: float) -> tuple[flo
     return math.degrees(elevation), math.degrees(azimuth) % 360
 
 
-def sunshine(when: datetime, latitude: float, longitude: float, cloud_percent: float | None) -> tuple:
+def sunshine(when: datetime, latitude: float, longitude: float, cloud_percent: float | None,
+             clearness: float | None = None) -> tuple:
     """kW/m² reaching an east, south and west wall and the horizontal sky, from sun geometry and cloud cover.
 
-    The same construction is used for fitting and for planning, so its crude
-    cloud law is absorbed into the fitted weights instead of biasing the plan.
+    `clearness` (0 overcast … 1 clear) replaces the cloud law when the sky was
+    measured, by the house's own solar panels.
     """
     elevation, azimuth = sun_position(when, latitude, longitude)
     if elevation <= 1:
@@ -105,7 +112,7 @@ def sunshine(when: datetime, latitude: float, longitude: float, cloud_percent: f
     sin_el = math.sin(math.radians(elevation))
     beam = 0.95 * 0.7 ** ((1 / sin_el) ** 0.678)  # clear-sky direct normal, Meinel
     cloud = min(1.0, max(0.0, (50.0 if cloud_percent is None else cloud_percent) / 100))
-    clear = 1 - 0.75 * cloud ** 3.4  # Kasten–Czeplak
+    clear = 1 - 0.75 * cloud ** 3.4 if clearness is None else clearness  # Kasten–Czeplak
     cos_el = math.cos(math.radians(elevation))
     wall = lambda facing: clear * beam * max(0.0, cos_el * math.cos(math.radians(azimuth - facing)))
     return wall(90), wall(180), wall(270), clear * beam * sin_el * 1.1
@@ -145,9 +152,17 @@ class Step:
     price: float
 
 
+NOWCAST_STEPS = 6  # measured sunshine fades into the forecast over three hours
+
+
 def horizon(now: datetime, forecast: list[tuple[datetime, float, float | None]], comfort: Comfort,
-            latitude: float, longitude: float, outdoor_now: float, local_offset_hours: float) -> list[Step]:
-    """One Step per half hour. `forecast` rows are (time, outdoor °C, cloud %); the last row is held."""
+            latitude: float, longitude: float, outdoor_now: float, local_offset_hours: float,
+            clearness_now: float | None = None) -> list[Step]:
+    """One Step per half hour. `forecast` rows are (time, outdoor °C, cloud %); the last row is held.
+
+    With `clearness_now` measured, the next hours start from the sky as it is
+    and blend into the forecast: forecast cloud alone missed whole sunny days.
+    """
     rows = sorted(forecast, key=lambda row: row[0])
     steps = []
     for index in range(HORIZON_STEPS):
@@ -164,6 +179,10 @@ def horizon(now: datetime, forecast: list[tuple[datetime, float, float | None]],
         else:
             outdoor, cloud = before[-1][1], before[-1][2]
         sun = sunshine(at, latitude, longitude, cloud)
+        if clearness_now is not None and index < NOWCAST_STEPS:
+            share = 1 - index / NOWCAST_STEPS
+            forecast_clear = 1 - 0.75 * min(1.0, max(0.0, (50.0 if cloud is None else cloud) / 100)) ** 3.4
+            sun = sunshine(at, latitude, longitude, cloud, share * clearness_now + (1 - share) * forecast_clear)
         local_hour = (at.astimezone(timezone.utc).hour + at.minute / 60 + local_offset_hours) % 24
         steps.append(Step(outdoor, sun, comfort.floor(local_hour), comfort.target + comfort.headroom,
                           1 - comfort.sun_discount * min(1.0, sun[3] / 0.5)))
@@ -186,6 +205,8 @@ def simulate(house: House, comfort: Comfort, steps: list[Step], waters: list[flo
         if setpoint is not None:
             water = setpoint = min(setpoint + comfort.rise_step, max(setpoint - comfort.fall_step, water))
         heat = house.heat_kw(water, state[0])
+        if not running and run_left <= 0 and not house.starts(water, state[0]):
+            heat = 0.0
         if run_left > 0:  # the setpoint is held above the return water until the run has lasted its hour
             heat = max(heat, house.q_min)
         elif heat > 0 and not running:
@@ -285,15 +306,22 @@ class Estimate:
         return house.resting(self.room, 0.0, self.glow, self.slab)
 
     def update(self, house: House, now: float, room: float, outdoor: float, water: float | None,
-               on_fraction: float, sun: tuple) -> None:
-        """Advance with what the heat pump and the sky actually did, then correct toward the measured room."""
+               on_fraction: float, sun: tuple, measured_heat: float | None = None) -> None:
+        """Advance with what the heat pump and the sky actually did, then correct toward the measured room.
+
+        `measured_heat` (kW over the interval, from the electricity meter) replaces the
+        emitter model's guess from setpoint and run time when it is known.
+        """
         if self.slab is None or self.at is None or self.room is None or not 0 < now - self.at <= 2 * 3600:
             if self.slab is None or self.at is None or now - self.at > 6 * 3600:
                 self.slab, self.glow = house.resting(room, outdoor)[0], 0.0
             self.room, self.at, self.predicted = room, now, None
             return
         hours = (now - self.at) / 3600
-        heat = house.heat_kw(water, self.slab) * min(1.0, max(0.0, on_fraction)) if water is not None else 0.0
+        if measured_heat is not None:
+            heat = measured_heat
+        else:
+            heat = house.heat_kw(water, self.slab) * min(1.0, max(0.0, on_fraction)) if water is not None else 0.0
         state = self.state(house)
         parts = max(1, round(hours / 0.25))
         for _ in range(parts):
@@ -329,6 +357,17 @@ class Guard:
 def too_warm(room: float, ceiling: float) -> bool:
     """The measured room is a thermometer step over its band: whatever the model believes, add no heat."""
     return room > ceiling + 0.2
+
+
+def start_level(water: float, wants_start: bool, outlet: float | None, gap: float) -> float:
+    """A plan that starts the idle compressor now must clear the resting outlet by the unit's restart gap.
+
+    Anything less is a setpoint the unit ignores: on the first house no start in
+    a week of history came with the setpoint under outlet + 4.5 °C.
+    """
+    if not wants_start or outlet is None:
+        return water
+    return max(water, math.ceil(outlet + gap))
 
 
 def keep_running(water: float, wants_heat: bool, return_water: float | None, margin: float = 1.5) -> float:

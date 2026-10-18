@@ -410,3 +410,18 @@ device unavailability up to the same limit. The stored 90-second value is
 ignored rather than migrated, at the owner's request. Above about 50 °C the
 tank climbs slowly on the electric heater; the 4-hour runtime limit is
 unchanged. 231 tests pass on Python 3.14.7 / HA 2026.7.4.
+
+### October 18 the house learns itself — 0.5.0
+
+The owner asked why the planner's house is a fixed set of numbers, and that it
+should drift with the seasons and set itself up on another house. 0.5.0 keeps a
+four-week half-hour log in its own store and refits heat loss and sun gains
+every night at 03:00, adopting a refit only when it forecasts the last two days
+better. The minimum output, resting outlet and the heat pump's restart gap are
+measured from the same log. The live estimate uses metered heat, PV measures
+the sky for the estimator and the next three planned hours, the planner knows
+an idle compressor starts only past its restart gap, and the hot loop after a
+tank run no longer drives the setpoint to 40 °C (17 October). Replays and the
+day-by-day test on real October data are in [PREDICTIVE.md](PREDICTIVE.md#050-the-house-learns-itself).
+250 tests pass on Python 3.14.7 / HA 2026.7.4. Not yet installed in the house.
+

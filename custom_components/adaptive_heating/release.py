@@ -77,7 +77,7 @@ def validate_archive(blob: bytes, checksum: str, expected_version: str, ha_versi
                 ast.parse(contents, filename=name)
             files[name] = contents
     for required in ("manifest.json", "release.json", "__init__.py", "config_flow.py", "const.py", "engine.py", "updater.py",
-                     "coordinator.py", "entity.py", "sensor.py", "number.py", "select.py", "button.py", "update.py",
+                     "coordinator.py", "mpc.py", "learn.py", "entity.py", "sensor.py", "number.py", "select.py", "button.py", "update.py",
                      "release.py", "strings.json", "translations/en.json"):
         if required not in files:
             raise ValueError(f"Release missing {required}")
