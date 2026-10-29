@@ -654,7 +654,8 @@ class HeatingCoordinator(DataUpdateCoordinator):
                 if self.planner_settings.cold_night_enabled and snapshot["indoor"] >= self.planner_settings.preheat_ceiling:
                     decision = replace(decision, proposed=self.settings.minimum_water, predicted_minimum=None,
                                        reason="Room reached the preheat ceiling; reducing floor heat within water limits")
-                predictive = None if ac_active else await self.predictive_plan(now, snapshot)
+                # Only an assistance session owns the room; a manual AC just keeps it out of learning.
+                predictive = None if self.ac.session else await self.predictive_plan(now, snapshot)
                 if predictive is not None:
                     decision = replace(decision, proposed=predictive[0], predicted_minimum=predictive[1], reason=predictive[2])
                     result.update(plan=predictive[3], plan_energy_kwh=predictive[4])

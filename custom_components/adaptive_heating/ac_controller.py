@@ -183,7 +183,8 @@ class ACController:
         if self.last_mode not in (None, "off", "fan_only") and current == "off":
             self.stopped_at = stamp
         self.last_mode = current
-        if self.session or self.corrupt_journal or current not in ("off", "fan_only"):
+        # An AC that is unavailable or missing is not heating the room; the AC is optional help.
+        if self.session or self.corrupt_journal or current not in ("off", "fan_only", "unavailable", "unknown"):
             self.blocked_until = max(self.blocked_until, stamp + self.settings.ac_settle_minutes * 60)
             return True
         return stamp <= self.blocked_until

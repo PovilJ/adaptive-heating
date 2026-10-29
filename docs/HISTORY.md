@@ -436,3 +436,13 @@ predicted, and caps planned water at the heating curve + 5 °C. Details and
 replays in [PREDICTIVE.md](PREDICTIVE.md#051-no-39-c-in-mild-weather).
 251 tests pass on Python 3.14.7 / HA 2026.7.4.
 
+
+### October 29 an unavailable AC switched the planner off — 0.5.2
+
+After a Home Assistant restart on 27 Oct 16:35 UTC the living-room AC entity
+stayed `unavailable`. The AC guard counted any state other than off/fan-only as
+"AC may be heating", which also disabled the predictive plan, so for two days
+the plain weather curve held 29–30 °C water with the room 0.9 °C over target.
+AC assistance was Off throughout. Now an unavailable or missing AC counts as
+off, and a manual AC only keeps intervals out of learning; only an AC
+assistance session hands the room back to the curve. 251 tests pass.

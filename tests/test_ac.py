@@ -130,8 +130,10 @@ class ACBoundary(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.controller.blocks_learning(self.now))
         self.advance(seconds=1)
         self.assertFalse(self.controller.blocks_learning(self.now))
-        self.states["climate.living"].state = "unavailable"
-        self.assertTrue(self.controller.blocks_learning(self.now))
+        self.advance(minutes=61)
+        for missing in ("unavailable", "unknown"):
+            self.states["climate.living"].state = missing
+            self.assertFalse(self.controller.blocks_learning(self.now))
 
     async def test_unconfigured_ac_does_not_block_legacy_learning(self):
         self.config.pop("ac_entity")
