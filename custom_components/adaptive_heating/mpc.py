@@ -243,7 +243,9 @@ def simulate(house: House, comfort: Comfort, steps: list[Step], waters: list[flo
             # Linear, not squared: squared, a sunny afternoon nobody can prevent outweighed a cold morning.
             cost += comfort.warm_weight * warm * STEP_HOURS
         cost += 0.01 * abs(water - previous)  # no pointless setpoint chatter
-        cost += 0.001 * (water - comfort.minimum_water)  # among setpoints that deliver nothing, the lowest
+        # Among setpoints that deliver nothing, the lowest: the model may think 31 °C starts nothing
+        # where the real unit, with its own restart gap, starts. Strong enough to beat the chatter term.
+        cost += (0.001 if heat > 0 else 0.02) * (water - comfort.minimum_water)
         previous = water
     return cost, path, energy
 
@@ -285,7 +287,10 @@ def plan(house: House, comfort: Comfort, steps: list[Step], state: tuple, bias: 
     hold = house.resting(comfort.target, coldest)[0] + house.dead + (
         house.loss * max(0.0, comfort.target - coldest) / house.heat / house.emit)
     hold = min(comfort.maximum_water, max(comfort.minimum_water, round(hold)))
+    # Flat mid levels too: from the extremes alone the search settled on late 33-34 °C catch-ups where
+    # holding 27-31 °C from earlier was cheaper (3 Nov 2026: plan cost -29 % over three days, 0.4 s a plan).
     starts = [[comfort.minimum_water] * len(BLOCKS), fit([hold] * len(BLOCKS))]
+    starts += [fit([comfort.minimum_water + d] * len(BLOCKS)) for d in (2, 4, 6, 8)]
     if seed and len(seed) == len(BLOCKS):
         starts.append(fit(seed))
     best, best_cost = None, math.inf
@@ -351,12 +356,20 @@ class Estimate:
         # On an overcast day the whole warm surprise used to become glow, which fades in the plan: the
         # room read 1 °C over target while the planner believed the house was at target and kept heating.
         drive = house.sun_east * sun[0] + house.sun_south * sun[1] + house.sun_west * sun[2]
-        self.glow = min(6.0, max(0.0, state[2] + min(error, 0.5 * drive * hours)))
+        # With no heat going in, the floor cannot have gained any: a warm surprise is sun or
+        # cooking, and it fades. On 3 Nov 2026 the sun took the room to 24 °C on an idle day,
+        # the slab estimate climbed 0.9 °C with it while the loop water fell 1.5 °C, and the
+        # planner expected a slow evening that came at 0.5 °C/h. Replayed on the logged
+        # fortnight, evenings after sun: 4-hour forecast error 0.36 -> 0.24 °C, warm bias gone.
+        idle = heat < 0.5 * house.q_min
+        self.glow = min(6.0, max(0.0, state[2] + (error if idle else min(error, 0.5 * drive * hours))))
         # Whatever the glow cannot absorb (it cannot go negative) is heat in the slab, and it stays,
         # but no faster than a floor changes: 18 Oct 2026, cooking then airing moved the room
         # 2.4 °C in minutes, and the slab estimate fell a degree with it.
         limit = 0.6 * max(hours, 0.25)
-        self.slab = min(45.0, max(room - 1.0, state[0] + max(-limit, min(limit, error - (self.glow - state[2])))))
+        move = max(-limit, min(limit, error - (self.glow - state[2])))
+        # A heated floor sits near or above the room; an idle one under a sunny room can sit well below it.
+        self.slab = min(45.0, max(room - (3.0 if idle else 1.0), state[0] + (min(0.0, move) if idle else move)))
         # The drift term is for errors that persist for days. Learned quickly, a start-up
         # mismatch became 4 kW of imaginary heat loss and a night of 38 °C water. It learns per
         # hour of evidence, not per update: on 18 Oct a dozen updates in twenty minutes (mode

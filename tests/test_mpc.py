@@ -132,16 +132,28 @@ class Planning(unittest.TestCase):
         self.assertFalse(mpc.too_warm(22.5, ceiling))
         self.assertTrue(mpc.too_warm(22.7, ceiling))  # 13 October: reached at 14:37, the compressor ran until 17:00
 
-    def test_estimate_blames_the_slab_at_night_and_the_sun_by_day(self):
+    def test_estimate_blames_the_slab_while_heating_and_the_sun_by_day(self):
         night, day = mpc.Estimate(), mpc.Estimate()
         noon = datetime(2026, 10, 10, 9, 0, tzinfo=timezone.utc)
-        for estimate, when in ((night, MIDNIGHT), (day, noon)):
+        for estimate, when, water in ((night, MIDNIGHT, 32), (day, noon, None)):
             sun = mpc.sunshine(when, *PLACE, 0)
-            estimate.update(self.house, when.timestamp(), 22.5, 5, None, 0, sun)
-            estimate.update(self.house, when.timestamp() + 1800, 23.0, 5, None, 0, sun)
+            estimate.update(self.house, when.timestamp(), 22.5, 5, water, 1, sun)
+            estimate.update(self.house, when.timestamp() + 1800, 23.5, 5, water, 1, sun)
         self.assertGreater(night.slab, day.slab)
         self.assertGreater(day.glow, night.glow)
-        self.assertAlmostEqual(self.house.room(night.state(self.house)), 23.0, places=6)
+        self.assertAlmostEqual(self.house.room(night.state(self.house)), 23.5, places=6)
+
+    def test_an_idle_floor_does_not_warm_with_a_sunny_room(self):
+        # 3 Nov 2026: no heating all day, the sun took the room 22.4 -> 24.0 °C and the slab estimate followed.
+        estimate = mpc.Estimate()
+        start = datetime(2026, 11, 3, 8, 0, tzinfo=timezone.utc)
+        estimate.update(self.house, start.timestamp(), 22.4, 8, 25, 0, (0, 0, 0))
+        slab = estimate.slab
+        for k, room in enumerate((22.8, 23.2, 23.6, 24.0), 1):
+            estimate.update(self.house, start.timestamp() + 1800 * k, room, 8, 25, 0, (0, 0, 0))
+        self.assertLessEqual(estimate.slab, slab)
+        self.assertGreater(estimate.glow, 1.0)
+        self.assertAlmostEqual(self.house.room(estimate.state(self.house)), 24.0, places=6)
 
     def test_overcast_warmth_is_heat_in_the_house_and_not_sun(self):
         # 13 October 2026: 100 % cloud, floor heating on, room climbing 0.2 °C per cycle above the forecast.

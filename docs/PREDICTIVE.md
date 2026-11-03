@@ -501,3 +501,62 @@ before the refit has the house; afterwards both ceilings give none. +2 left
 the leakier house cold every day (a fixed curve does not fit it), so +5.
 Replayed on 18 October's evening the plan becomes 33 °C now, a few hours at
 26–29 °C, then a steady 33 °C overnight, with no Guard boost.
+
+## 0.5.3: an idle floor does not warm, and gentler catch-ups
+
+3 November 2026 was sunny and the floor got no heat all day. The sun took the
+room from 22.4 to 24.0 °C by noon. Two rules in the estimator moved that warmth
+into the slab: the glow (sun) share was capped at half the modelled sun, and
+the slab was never allowed below room − 1 °C. So the slab estimate climbed from
+21.97 to 22.89 °C while the loop water, circulating through the floor, fell
+from 26.1 to 24.6 °C. In the evening the planner expected the room to fall
+about 0.1–0.2 °C/h. It actually fell 0.5 °C/h, from 22.6 to 22.0 °C between
+18:10 and 19:22 local, and the plan only reacted at 22.0 °C with a late
+29–32 °C catch-up.
+
+**Estimator.** While the interval delivered less than half the minimum output
+(idle), a warm surprise is glow, which fades; the slab may only cool, and it
+may sit up to 3 °C under the room (1 °C while heating). Replayed through the
+integration's own learning log (22 Oct–3 Nov, 560 half hours, measured heat),
+forecasting the room ahead with the logged heat and sun:
+
+| rms °C (bias) | +1 h | +2 h | +4 h |
+| --- | --- | --- | --- |
+| all rows, 0.5.2 | 0.164 | 0.234 | 0.305 (−0.06) |
+| all rows, 0.5.3 | 0.153 | 0.215 | 0.278 (−0.03) |
+| evenings after a sunny day, 0.5.2 | 0.350 (+0.13) | 0.384 (+0.20) | 0.364 (+0.12) |
+| evenings after a sunny day, 0.5.3 | 0.301 (+0.05) | 0.268 (+0.08) | 0.239 (−0.03) |
+
+**The loop water as a floor thermometer was tried and rejected.** Pulling the
+slab toward outlet − `idle_offset` once the compressor had rested an hour made
+every horizon worse, and more so the harder it pulled (+4 h rms 0.305 → 0.316,
+0.344, 0.431 at 0.25, 0.5, 1 per hour). A joint refit of the house with the
+outlet as a slab measurement did not help either (held-out two days +4 h rms
+0.248 → 0.262–0.276). Right after a run the loop still carries run heat, and
+`idle_offset` is learned against the model's own slab, so the reading is not
+an independent floor temperature for this model. It still shows the trend:
+on 3 Nov the falling loop water was the sign the slab estimate had gone wrong.
+
+**Plan search.** The coordinate search began only from "no heat" and "hold
+the target against the coldest hour", and from there it often settled on
+waiting followed by a 33–34 °C catch-up. Four flat seeds (minimum + 2, 4, 6,
+8 °C) find steadier schedules: over 1–3 Nov, every three hours, the mean plan
+cost fell 59.6 → 42.2 (0.05 → 0.16 s a plan). Because a flat seed could leave a
+non-delivering 31 °C as the first step, which the real unit with its own
+restart gap might start on, a setpoint that delivers nothing now costs 0.02
+per °C above the minimum (was 0.001).
+
+Re-planned on 3 Nov with the fixed estimator, the plan starts at 27 °C from
+16:20–16:50 local, where the live one waited until 19:20.
+
+Closed loop (`scripts/learning_replay.py`, learning on in both, `--old ff4f127`):
+
+| Plant, period | 0.5.2 kWh/day, h/day under band, coldest | 0.5.3 |
+| --- | --- | --- |
+| first house, 19 Oct–3 Nov | 13.73, 1.6, 21.00 °C | 13.45, 0.9, 21.36 °C |
+| other house, 19 Oct–3 Nov | 33.19, 2.0, 20.78 °C | 33.03, 1.6, 21.18 °C |
+| first house, 5–25 Jan | 62.61, 0.7, 21.31 °C | 62.13, 0.8, 21.13 °C |
+
+In mild, sunny weather it is warmer when it matters for slightly less
+electricity; in January's cold it is about even (the house heats almost all
+the time, so the idle rule rarely applies).

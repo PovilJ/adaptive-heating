@@ -446,3 +446,16 @@ the plain weather curve held 29–30 °C water with the room 0.9 °C over target
 AC assistance was Off throughout. Now an unavailable or missing AC counts as
 off, and a manual AC only keeps intervals out of learning; only an AC
 assistance session hands the room back to the curve. 251 tests pass.
+
+### November 3 a sunny idle day hid a cold floor — 0.5.3
+
+The sun took the room to 24.0 °C with no heating; the estimator put that
+warmth into the slab (estimate 21.97 → 22.89 °C) while the loop water fell
+26.1 → 24.6 °C. The planner then expected a slow evening, the room fell
+0.5 °C/h, and it reacted only at 22.0 °C (19:22 local) with a 29–32 °C
+catch-up. Now an idle floor may only cool and may sit up to 3 °C under the
+room, and the plan search also starts from flat 27–33 °C levels, which finds
+earlier, gentler heating. The loop water as a direct floor reading was tested
+and made forecasts worse. Replays and numbers in
+[PREDICTIVE.md](PREDICTIVE.md#053-an-idle-floor-does-not-warm-and-gentler-catch-ups).
+252 tests pass.
