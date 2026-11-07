@@ -26,6 +26,7 @@ DEFAULTS = {
     "ac_max_session_kwh": 2.0,
     "ac_sample_seconds": 600.0,
     "ac_preheat_max": 23.0,
+    "ac_assist_below": 1.0,
 }
 ENTITIES = {"ac_entity": ["climate"], "ac_room_entity": ["sensor"], "ac_power_entity": ["sensor"]}
 ACK_SECONDS = 120
@@ -42,6 +43,7 @@ class ACSettings:
     ac_max_session_kwh: float = 2
     ac_sample_seconds: float = 600
     ac_preheat_max: float = 23
+    ac_assist_below: float = 1.0
 
     def __post_init__(self):
         if any(finite(v) is None for v in asdict(self).values()):
@@ -54,6 +56,8 @@ class ACSettings:
             raise ValueError("Invalid AC rest or learning settling period")
         if not 0.1 <= self.ac_max_session_kwh <= 10 or not 60 <= self.ac_sample_seconds <= 900:
             raise ValueError("Invalid AC energy budget or maximum sensor age")
+        if not 0.3 <= self.ac_assist_below <= 5:
+            raise ValueError("AC assistance threshold must be 0.3-5 Celsius under the room target")
 
 
 def climate_unit(hass, state):
@@ -222,7 +226,7 @@ class ACController:
         room = self.sample("ac_room_entity", now)[0]
         if room is None:
             return "External AC room temperature unavailable, stale, or invalid"
-        ceiling = min(self.settings.ac_preheat_max, self.owner.config.get("preheat_ceiling", self.settings.ac_preheat_max))
+        ceiling = self.settings.ac_preheat_max
         if room >= ceiling:
             return "AC room reached the preheat ceiling"
         if finite(target) is None or not 10 <= target <= ceiling:
@@ -232,7 +236,7 @@ class ACController:
         except ValueError as error:
             return str(error)
         if starting and room >= target - 0.3:
-            return "AC room already near the preparation target"
+            return "AC room already near the target"
         if self.owner.config.get("ac_power_entity") and self.sample("ac_power_entity", now, "power")[0] is None:
             return "Configured AC power meter unavailable, stale, or invalid"
         return ""
@@ -458,13 +462,13 @@ class ACController:
                 return
             room = self.sample("ac_room_entity", now)[0]
             if room >= session["target"]:
-                await self.async_stop("AC room reached the preparation target")
+                await self.async_stop("AC room reached the target")
                 return
             if (not requested or target is None or target < session["target"] - 0.05) and now - session["started"] >= self.settings.ac_min_on_minutes * 60:
-                await self.async_stop(reason or "Forecast preparation no longer needs AC assistance")
+                await self.async_stop(reason or "The floor heating no longer needs AC assistance")
                 return
             session["phase"] = self.status = "running"
-            self.reason = reason or "Bounded preparation session running"
+            self.reason = reason or "Bounded assistance session running"
             await self.save()
             return
         if not self.configured:
@@ -487,7 +491,7 @@ class ACController:
         elif requested:
             await self.start(target, reason)
         else:
-            self.status, self.reason = "waiting", reason or "Forecast preparation does not request AC assistance"
+            self.status, self.reason = "waiting", reason or "The floor heating does not request AC assistance"
 
     async def async_mode(self, mode):
         if mode not in MODES:

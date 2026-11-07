@@ -45,11 +45,13 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         flow = module("config_flow")
         config = {"indoor_entity": "sensor.room", "weather_entity": "weather.house",
                   "output_entity": "number.water", "operating_entity": "sensor.activity",
+                  "inlet_entity": "sensor.return", "outlet_entity": "sensor.supply",
                   "heating_mode_entity": "number.mode", "heating_mode_state": "4", "heating_state": "HEAT"}
         for entity in config.values():
             if isinstance(entity, str) and "." in entity:
                 self.hass.states.async_set(entity, "4.0" if entity == "number.mode" else "OFF")
-        self.hass.states.async_set("number.water", 30, {"unit_of_measurement": "°C"})
+        for entity in ("number.water", "sensor.return", "sensor.supply"):
+            self.hass.states.async_set(entity, 30, {"unit_of_measurement": "°C"})
         schema = flow.settings_schema(config)
         self.assertEqual(schema(config)["heating_mode_entity"], "number.mode")
         self.assertEqual(flow.validate(self.hass, config), {})
@@ -57,6 +59,12 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(flow.validate(self.hass, config | {key: " "})[key], "state_required")
         self.assertEqual(flow.validate(self.hass, config | {"heating_idle_state": "HOT WATER"})["heating_idle_state"],
                          "idle_hot_water_conflict")
+        # The controller reads the floor from the water sensors: the form requires them.
+        without = {k: v for k, v in config.items() if k != "inlet_entity"}
+        with self.assertRaises(Exception):
+            flow.settings_schema(without)(without)
+        self.assertEqual(flow.validate(self.hass, config | {"run_output_kw": -1})["base"], "invalid_limits")
+        self.assertEqual(flow.validate(self.hass, config | {"ac_assist_below": 9})["base"], "invalid_ac_limits")
 
     async def test_full_entry_setup_options_and_unload_restore_tank(self):
         from homeassistant import bootstrap, loader
@@ -71,29 +79,50 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
             domain: loader.Integration(self.hass, "custom_components.adaptive_heating", SOURCE, manifest,
                                        {path.name for path in SOURCE.iterdir()})
         }
+        from homeassistant.helpers import entity_registry as er
         config = {"indoor_entity": "sensor.room", "weather_entity": "weather.house",
                   "output_entity": "number.water", "operating_entity": "sensor.operating",
+                  "inlet_entity": "sensor.return", "outlet_entity": "sensor.supply",
+                  "heating_mode_entity": "number.mode", "heating_mode_state": "4",
                   "tank_temperature_entity": "sensor.tank", "tank_target_entity": "number.tank"}
+        retired = {"curve_slope": 0.5, "cold_night_enabled": True, "predictive": True, "sun_entity": "sun.sun"}
         self.hass.states.async_set("sensor.room", 22, {"unit_of_measurement": "°C"})
+        self.hass.states.async_set("sensor.return", 27, {"unit_of_measurement": "°C"})
+        self.hass.states.async_set("sensor.supply", 30, {"unit_of_measurement": "°C"})
+        self.hass.states.async_set("number.mode", "4.0")
         self.hass.states.async_set("weather.house", "cloudy", {"temperature": 10, "temperature_unit": "°C"})
         self.hass.states.async_set("sensor.operating", "HEAT")
         self.hass.states.async_set("sensor.tank", 40, {"unit_of_measurement": "°C"})
         attrs = {"unit_of_measurement": "°C", "min": 20, "max": 80, "step": 1}
         self.hass.states.async_set("number.water", 30, attrs)
         self.hass.states.async_set("number.tank", 52, attrs)
-        entry = ConfigEntry(domain=domain, data=config, options={}, source="user", title="Test heating",
-                            version=1, minor_version=1, discovery_keys={}, subentries_data=[], unique_id=None)
+        # A 0.5 entry (config 1.1) with retired options, a retired sensor and a 0.5 learning store.
+        entry = ConfigEntry(domain=domain, data=config | retired, options={"rise_per_hour": 4.0, "target": 21.5},
+                            source="user", title="Test heating", version=1, minor_version=1, discovery_keys={},
+                            subentries_data=[], unique_id=None)
+        registry = er.async_get(self.hass)
+        old = registry.async_get_or_create("sensor", domain, f"{entry.entry_id}_planner_status")
+        from homeassistant.helpers.storage import Store
+        await Store(self.hass, 1, f"{domain}.{entry.entry_id}.learning").async_save({"identity": "x", "log": {}})
+        await Store(self.hass, 1, f"{domain}.{entry.entry_id}").async_save(
+            {"identity": "x", "model_revision": 3, "target": 21.8, "configured_target": 21.5})
         await self.hass.config_entries.async_add(entry)
         self.assertEqual(entry.state, ConfigEntryState.LOADED)
         await self.hass.async_block_till_done()
+        self.assertEqual(entry.minor_version, 2)
+        self.assertFalse(set(retired) & set(entry.data))
+        self.assertEqual(entry.options, {"target": 21.5})
+        self.assertEqual({k: entry.data[k] for k in config}, config)
+        self.assertIsNone(registry.async_get(old.entity_id))
+        self.assertIsNone(await Store(self.hass, 1, f"{domain}.{entry.entry_id}.learning").async_load())
         coordinator = entry.runtime_data
+        self.assertEqual(coordinator.settings.target, 21.8)
         self.assertEqual(coordinator.disinfection.mode, "observe")
-        self.hass.states.async_set("sensor.operating", "OFF")
-        await self.hass.async_block_till_done()
-        self.assertIs(coordinator.operating_events[-1][1], False)
-        self.hass.states.async_set("sensor.operating", "HEAT")
-        await self.hass.async_block_till_done()
-        self.assertIs(coordinator.operating_events[-1][1], True)
+        self.assertEqual(coordinator.data["status"], "observing")
+        cycle = self.hass.states.get("sensor.test_heating_heating_cycle")
+        self.assertIsNotNone(cycle)
+        self.assertIn("slab_target", cycle.attributes)
+        self.assertIsNotNone(self.hass.states.get("sensor.test_heating_floor_estimate"))
         self.assertIsNotNone(self.hass.states.get("sensor.test_heating_disinfection_status"))
         form = await self.hass.config_entries.options.async_init(entry.entry_id)
         self.assertEqual(form["type"], "form")
@@ -126,10 +155,21 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator.disinfection.last_success)
         self.assertEqual(self.hass.states.get("sensor.test_heating_disinfection_status").state, "unavailable")
 
-        # The persisted journal is clear, and reloading never restores Automatic.
+        # The persisted journal is clear, and reloading never restores tank Automatic.
         self.assertTrue(await self.hass.config_entries.async_setup(entry.entry_id))
         self.assertEqual(entry.runtime_data.disinfection.mode, "observe")
         self.assertIsNone(entry.runtime_data.disinfection.cycle)
+        # Heating Automatic resumes after a plain reload; the unit is handed back on the way.
+        await entry.runtime_data.async_mode("automatic")
+        await self.hass.async_block_till_done()
+        self.assertTrue(entry.runtime_data.in_charge)
+        self.assertTrue(await self.hass.config_entries.async_reload(entry.entry_id))
+        await self.hass.async_block_till_done()
+        water = [w["value"] for w in writes if w["entity_id"] == "number.water"]
+        self.assertTrue(water)
+        self.assertLess(water[-1], 30)
+        self.assertEqual(entry.runtime_data.mode, "automatic")
+        self.assertEqual(entry.runtime_data.disinfection.mode, "observe")
         self.assertTrue(await self.hass.config_entries.async_unload(entry.entry_id))
 
     async def test_ac_entities_options_events_and_unload_recovery(self):
@@ -147,9 +187,14 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
                                        {path.name for path in SOURCE.iterdir()})}
         config = {"indoor_entity": "sensor.room", "weather_entity": "weather.house",
                   "output_entity": "number.water", "operating_entity": "sensor.operating",
+                  "inlet_entity": "sensor.return", "outlet_entity": "sensor.supply",
+                  "heating_mode_entity": "number.mode", "heating_mode_state": "4",
                   "ac_entity": "climate.living", "ac_room_entity": "sensor.room"}
         for entity, state, attrs in (
+            ("number.mode", "4.0", {}),
             ("sensor.room", 22, {"unit_of_measurement": "°C"}),
+            ("sensor.return", 27, {"unit_of_measurement": "°C"}),
+            ("sensor.supply", 30, {"unit_of_measurement": "°C"}),
             ("weather.house", "cloudy", {"temperature": 0, "temperature_unit": "°C"}),
             ("sensor.operating", "HEAT", {}),
             ("number.water", 30, {"unit_of_measurement": "°C", "min": 20, "max": 50, "step": 1}),
@@ -165,18 +210,14 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         c = entry.runtime_data
         self.assertEqual(c.ac.mode, "observe")
         self.assertIsNotNone(self.hass.states.get("select.ac_test_ac_assistance_mode"))
-        self.assertIsNotNone(self.hass.states.get("sensor.ac_test_cold_night_plan"))
+        self.assertIsNotNone(self.hass.states.get("sensor.ac_test_heating_cycle"))
 
-        # Ordinary thermometer events must not erase model observations while
-        # the AC remains Off. A transient AC operation does invalidate them.
-        stamp = dt_util.utcnow()
-        c.previous = {"marker": True}
-        c.room_history = [(stamp, 22)]
-        c.coast_since = stamp
+        # Ordinary thermometer events do not keep the room out of learning while the AC
+        # remains Off; an AC operation does.
+        c.ac.blocked_until = 0
         self.hass.states.async_set("sensor.room", 22.1, {"unit_of_measurement": "°C"})
         await self.hass.async_block_till_done()
-        self.assertEqual(c.previous, {"marker": True})
-        self.assertEqual(c.coast_since, stamp)
+        self.assertFalse(c.ac.blocks_learning(dt_util.utcnow()))
 
         flow_module = importlib.import_module("custom_components.adaptive_heating.config_flow")
         duplicate = config | {"output_entity": "number.other", "heating_state": "HEAT"}
@@ -197,7 +238,7 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
             await c.ac.async_tick(True, 23, "Test preparation")
         await self.hass.async_block_till_done()
         self.assertEqual(self.hass.states.get("climate.living").state, "heat")
-        self.assertIsNone(c.previous)
+        self.assertTrue(c.ac.blocks_learning(dt_util.utcnow()))
         self.assertEqual(flow_module.validate(self.hass, config | {"heating_state": "HEAT"}, entry.entry_id)["base"], "ac_active")
         self.assertTrue(await self.hass.config_entries.async_unload(entry.entry_id))
         await self.hass.async_block_till_done()

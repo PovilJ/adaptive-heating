@@ -1,5 +1,9 @@
 # Cold-night preparation and optional AC assistance
 
+> **Retired in 0.6.0.** Cold-night preparation and coasting were removed with the 0.6
+> slab thermostat ([CONTROLLER.md](CONTROLLER.md)); AC assistance remains, requested by
+> the new controller. This page is the record of 0.3–0.5.
+
 Version 0.3.0 adds an optional planner for homes that can build warmth before a
 cold night, coast within an agreed comfort range, and resume floor heating before
 the room becomes too cool. It extends the existing weather curve and room

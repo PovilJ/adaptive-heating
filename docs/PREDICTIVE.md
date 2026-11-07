@@ -1,5 +1,10 @@
 # Predictive planner (0.4.0)
 
+> **Retired in 0.6.0.** The predictive planner (`mpc.py`, `learn.py`) was replaced by the
+> slab thermostat ([CONTROLLER.md](CONTROLLER.md)) after the lab comparison
+> ([research/CONTROLLER_COMPARISON.md](research/CONTROLLER_COMPARISON.md)). This page is the
+> record of 0.4–0.5; the code is in git history.
+
 Written 2026-10-10 after two days of the 0.3.2 curve controller in the first
 house. This is the record of why the planner exists, how it works, how its
 numbers were obtained and what to check next.
@@ -25,7 +30,7 @@ comfortable, weather-aware and frugal with electricity.
 
 Every control interval (30 minutes, evaluation and command together):
 
-1. **Estimate** ([`mpc.Estimate`](../custom_components/adaptive_heating/mpc.py)).
+1. **Estimate** ([`mpc.Estimate`](https://github.com/PovilJ/adaptive-heating/blob/382a094/custom_components/adaptive_heating/mpc.py)).
    Advance a three-store model of the house with what the heat pump and sky did
    since the last cycle, compare with the thermometer, and correct: a warm
    surprise is attributed to sun on the room only as far as the sky allows
@@ -345,7 +350,7 @@ believed.
 
 ### What is learned, and how
 
-- **A log** ([`learn.Log`](../custom_components/adaptive_heating/learn.py)):
+- **A log** ([`learn.Log`](https://github.com/PovilJ/adaptive-heating/blob/382a094/custom_components/adaptive_heating/learn.py)):
   every control interval the coordinator records room, outdoor, forecast cloud,
   PV, setpoint, outlet, compressor duty, the slab estimate and the heat
   delivered. Heat comes from the electricity meter × the modelled COP. An

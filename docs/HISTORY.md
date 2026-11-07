@@ -1,13 +1,9 @@
 # Project history and status
 
-Last reviewed: **2026-10-08**. Current local source version: **0.3.1, experimental**.
-Version 0.3.1 is installed and restarted in the first house. Live checks on Home
-Assistant 2026.9.3 confirm Automatic evaluates while heating mode is enabled
-(`4.0`) and compressor activity is OFF. The first recommendation was 31.68 °C;
-the allowed/current water target remained 25 °C under startup rate limits and
-the 30-minute command interval. Tank scheduling Off, AC Observe and the 22 °C
-room target were restored. Device acknowledgment and room recovery over hours
-remain field-validation work.
+Last reviewed: **2026-11-07**. Current source version: **0.6.0, experimental**: the
+slab thermostat ([CONTROLLER.md](CONTROLLER.md)) replaces the 0.4–0.5 predictive
+planner. The first house last ran 0.5.3 (installed by the owner through HACS). The
+sections below keep the record of each earlier stage as it was written.
 
 Adaptive Heating began as house-specific PyScript code. The rewrite keeps the
 goal of adaptive, anticipatory water-temperature control and makes it a standalone
@@ -44,10 +40,10 @@ downgrade of the legacy script. No intervening legacy releases are archived here
 | --- | --- | --- |
 | Source preservation | Committed in `b063640` | Both supplied scripts remain unchanged; their checksums and known gaps are recorded. |
 | Reusable integration | Implemented; automated coverage | Entity selection and tuning use HA configuration entries/options. Learned parameters and the room target are stored per entry, outside Git and release archives. |
-| Heating controller | Installed 0.3.1; Automatic restored | Curve/forecast/room-trend feedback and bounded learned correction/recovery. Enabled-but-idle evaluation verified; representative equipment operation remains open. See the [comparison](MIGRATION.md#behavior-and-feature-disposition). |
-| Cold-night planning | Installed; enabled in the first house, default disabled elsewhere | Adaptive room reserve and conservative low-water cooldown support preparation, coasting and early recovery while existing water rate limits remain authoritative. No COP, tariff or thermal-capacity optimizer. |
+| Heating controller | Source 0.6.0 (slab thermostat); the house runs 0.5.3 | The 0.6 controller owns the compressor's runs: floor estimate from the water, a floor target from the room, forecast and learned pattern, gentle starts, mid-output riding, one-write stops and an outage-safe park. Ranked in the lab simulator only; the field install, the 5 K hysteresis step and the two-hold test are pending. See [CONTROLLER.md](CONTROLLER.md). |
+| Cold-night planning | Retired in 0.6.0 | The forecast and the learned daily pattern anticipate every day; the 0.3–0.5 record is in [COLD_NIGHTS.md](COLD_NIGHTS.md). |
 | AC assistance | Installed and mapped; Observe restored | Optional external thermometer and climate mapping; starts only with both controllers Automatic, borrows an Off unit, bounds sessions, detects manual edits, persists recovery and excludes AC-influenced learning. A power meter enables sampled session-kWh accounting; otherwise only runtime is bounded. |
-| Command handling and diagnostics | Implemented; automated coverage | Operating-state/inhibit gates, final limits and device steps, manual-change holds, Observe on restart, and separate proposed/limited/commanded/actual values. |
+| Command handling and diagnostics | Implemented; automated coverage | Operating-state/inhibit gates, final limits and device steps, manual-change holds with notifications, a write counted only once the device took it, the idle setpoint written when Automatic ends, Automatic resumed after a plain restart (0.6.0), and separate proposed/limited/commanded/actual values. |
 | Installation and manual updates | Manual 0.3.1 update/restart verified | Component-only ZIP/checksum validates 21 files. File editor API installation and source read-back, HA restart, options save/read-back and mode restoration are verified. Interrupted hardware-session recovery remains simulated. |
 | Installation by repository URL | Earlier HACS installation; latest update installed manually | Before the manual update HACS reported commit `cb33aec` and the integration reported 0.3.0. HACS's repository metadata is separate from the verified running integration version 0.3.1. The HA Apps repository screen remains a different installation mechanism. |
 | HA compatibility | Automated checks target HA 2026.7.4 | Isolated setup, platform/entity creation, options/reload and simulated recovery checks establish software compatibility within that environment. Hardware/network behavior still needs field validation. The version-specific results below preserve their original scope. |
@@ -116,6 +112,16 @@ downgrade of the legacy script. No intervening legacy releases are archived here
   the local version number.
 
 ## Next milestones
+
+- **Install 0.6.0 in the first house** and watch a few days in Observe, then Automatic: kicks,
+  rides, one-write stops, the parked setpoint never starting the unit, writes per day.
+- **Map the restart-hysteresis register**, and decide on 5 K on the unit (the lab's choice;
+  about 0.3 points over the season, more in mild weeks). The integration never writes it.
+- **Two-hold test** (UNIT_MODEL 7.2): alternate whole runs at 0 and 6.5 kW run output over
+  4–6 similar mild days and compare metered efficiency; the energy half of the 0.6 gain
+  depends on it.
+- **Sun estimate on met.no cloud:** check the cloud factor against the house's own PV once a
+  season of 0.6 data exists.
 
 ### October 8 local correction: compressor cycles and floor memory
 
@@ -459,3 +465,71 @@ earlier, gentler heating. The loop water as a direct floor reading was tested
 and made forecasts worse. Replays and numbers in
 [PREDICTIVE.md](PREDICTIVE.md#053-an-idle-floor-does-not-warm-and-gentler-catch-ups).
 252 tests pass.
+
+### November 7 the slab thermostat replaces the planner — 0.6.0
+
+The lab race ([research/CONTROLLER_COMPARISON.md](research/CONTROLLER_COMPARISON.md))
+ranked ten controllers in a calibrated simulator of the house and the Versati. A
+faithful port of 0.5.3 was no better than a plain room-holding PI controller and held
+the room 0.3 °C warm, worst in mild and sunny weeks; its guard layers added nothing.
+The winner, `hybrid`, is a thermostat on the floor slab read from the water sensors:
+it starts runs itself with the smallest restart setpoint, holds the unit at about
+6.5 kW inside the firmware's dead band, ends each run with one write, and moves the
+floor target with the forecast (cold and sun, 1–9 h), the room, a learned level and a
+learned daily pattern.
+
+0.6.0 makes that controller the integration: `slab.py` (standard library only) runs
+every minute from the coordinator, and the lab drives the same file through
+`lab/controllers/production.py`. `mpc.py`, `learn.py`, `planner.py`, the heating curve
+and its tests and replay scripts are deleted (git history keeps them). Production
+inputs: the unit's restart hysteresis is read (optional register mapping, else a 4 K
+option) and never written; forecast sun is rebuilt from cloud cover with a cloud
+factor fitted on the site's archived irradiance outside the ranking season; the room
+is used as reported (the 0.4.5 30-minute average cost comfort). AC assistance is
+asked for only while the floor heats and the room is at least 1 °C under target. A
+lost room thermometer no longer pauses heating: the controller follows a learned
+outdoor curve and raises a notification after an hour.
+
+Compatibility: config entries migrate to 1.2 (retired curve, planner and cold-night
+options removed, every other selection kept); the return/supply sensors become
+required and Automatic needs the heating-mode mapping; five 0.5 sensors are removed
+from the entity registry; the stored room target is kept, the 0.5 learning log is
+deleted, and the controller learns its level within hours and its daily pattern
+within one to two weeks. See [MIGRATION.md](MIGRATION.md#upgrading-05x-to-060).
+
+A review against recorded house data and Home Assistant behaviour added safety rules on top
+of the hybrid (`slab.Params.lab_hybrid=True` switches them off for the bit-for-bit check):
+the parked setpoint never reaches the restart point even when Minimum water is higher; small
+park lowerings wait like raises; no re-adoption right after the controller's own stop and no
+adoption with the floor over its stop point; an adopted run can end at once; the room input
+moves at most 0.05 °C a minute and the daily pattern takes at most 1.5 °C of error; a room
+report briefly `unavailable` keeps the last value. The coordinator now counts a write only once
+the device took it, gives the unit five minutes to show a write and asks once more, raises a
+notification on every hold, writes the idle setpoint once when Automatic ends, resumes
+Automatic after a plain restart or reload of the same version and options, saves at Home
+Assistant stop, keeps the previous forecast after a failed fetch, labels forecast rows by their
+own time, and treats an operating state no mapping names as a wait (a state containing
+"defrost" as a defrost when no defrost sensor is mapped). The owner-only lab data scripts that
+name the house's entities are kept out of the repository; coordinates were removed from the
+research notes.
+
+Lab, held-out seeds, paired against `reference_tuned` (simulated only): season (seeds 5–9)
+production −10.27 ± 0.60 % adjusted, −5.04 % metered, mean air 22.01 °C; hybrid
+−10.56 ± 0.58 %; hybrid at the unit's 4 K hysteresis −10.23 ± 0.55 %. Production trails the
+default hybrid by a consistent 0.2–0.6 points (it reads the unit's 4 K hysteresis instead of
+writing 5 K, and rebuilds sun from cloud cover). 20 of 20 robust variants better (seeds 5–6;
+mean air 21.99–22.02); all seven weeks better (seeds 5–9). Against 0.5.3 that is about 6.8 %
+less metered electricity with the room 0.3 °C closer to target. **What to expect:** less
+electricity in cold and mixed weather; in mild weeks about the same electricity (oct +2.1 %,
+mar −0.7 %) with a room much closer to target; the first days after the update may run a
+little warm until the learned level settles. The electricity half rests on the unit's fitted
+part-load efficiency (with flat efficiency the saving is about 1.4 %), which the two-hold test
+should confirm, and the lab's 0.5.3 port may run slightly warmer than the real 0.5.3. Details
+in [CONTROLLER.md](CONTROLLER.md#evidence). Recommended with the install: map the unit's
+restart-hysteresis register, and consider 5 K on the unit.
+
+168 tests pass on Python 3.14.7 / Home Assistant 2026.7.4
+(`.local/ha-test-venv/bin/python -m unittest discover -s tests -q`), including real-HA setup,
+the 1.1 → 1.2 entry migration, registry cleanup, the 0.5 store migration and a resumed reload.
+Not yet installed in the house.
+

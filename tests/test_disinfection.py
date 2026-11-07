@@ -67,6 +67,7 @@ class HoldPolicy(unittest.TestCase):
 class TankBoundary(unittest.IsolatedAsyncioTestCase):
     set_state = boundary.ControllerBoundary.set_state
     writes = boundary.ControllerBoundary.writes
+    new_controller = boundary.ControllerBoundary.new_controller
 
     async def asyncSetUp(self):
         await boundary.ControllerBoundary.asyncSetUp(self)
@@ -216,9 +217,8 @@ class TankBoundary(unittest.IsolatedAsyncioTestCase):
             await self.controller.async_disinfection_run()
         await self.controller.async_mode("automatic")
         self.assertEqual(self.controller.data["status"], "paused")
-        self.assertEqual(self.controller.model.emitter, 30)
-        self.assertEqual(self.controller.model.samples, 0)
-        self.assertEqual(len(self.writes()), 1)
+        self.assertIn("disinfection", self.controller.data["reason"])
+        self.assertEqual([call[2]["entity_id"] for call in self.writes()], ["number.tank"])
 
     async def test_fahrenheit_and_out_of_bounds(self):
         self.set_state("number.tank", 125.6, unit_of_measurement="°F", min=104, max=176, step=1.8)

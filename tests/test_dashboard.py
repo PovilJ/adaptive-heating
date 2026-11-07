@@ -14,7 +14,7 @@ builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 EXAMPLE = json.loads((ROOT / "docs" / "dashboard-mapping.example.json").read_text())
 E = EXAMPLE["entities"]
-OPTIONAL = ("planner_status", "ac_status", "ac_mode", "ac_power", "ac_energy")
+OPTIONAL = ("cycle", "slab_estimate", "ac_status", "ac_mode", "ac_power", "ac_energy")
 TEMPLATE_KEYS = ("primary", "secondary", "content", "icon_color")
 HAS_HA = importlib.util.find_spec("homeassistant") is not None
 
@@ -37,7 +37,7 @@ def walk(value):
 class DashboardMappings(unittest.TestCase):
     def test_tabs_have_stable_paths_and_icons(self):
         views = builder.build(EXAMPLE)["views"]
-        self.assertEqual([view["path"] for view in views], ["home", "trends", "plan", "water", "system"])
+        self.assertEqual([view["path"] for view in views], ["home", "trends", "floor", "water", "system"])
         self.assertTrue(all(view["icon"].startswith("mdi:") for view in views))
 
     def test_missing_required_mapping_is_reported(self):
@@ -98,11 +98,16 @@ class DashboardTemplates(unittest.IsolatedAsyncioTestCase):
         set_state(E["output"], "27")
         set_state(E["limited"], "29")
         set_state(E["operating"], "OFF")
-        set_state(E["status"], "command_sent", {"heating_enabled": True, "observed_room_cooling_celsius_per_hour": .2})
-        set_state(E["planner_status"], "prepare", {"effective_target": 22.8, "prepare_at": "invalid"})
+        set_state(E["status"], "command_sent", {"heating_enabled": True})
+        set_state(E["cycle"], "ride", {"slab_estimate": 24.31, "slab_target": 25.62, "start_below": 24.22,
+                                       "stop_above": 27.02, "learned_integral": 1.234, "room_sensor": "ok",
+                                       "target_parts": {"target": 22.5, "sun": -0.6}, "daily_pattern": [0.1] * 24,
+                                       "fallback_curve": {"-15": 1.0, "-5": 0.5, "+5": 0.0, "+15": -0.5}})
         content = self.render()
-        for expected in ("21.3 °C", "Target 22.5° · 1.2° below ↘", "blue", "Resting",
-                         "Water target · next 29.0°", "Preheating the floor", "22.8 °C"):
+        for expected in ("21.3 °C", "Target 22.5° · 1.2° below", "blue", "Resting",
+                         "Water target · next 29.0°", "Heating the floor", "Floor 24.3° · target 25.6°",
+                         "Start below 24.2°", "1.23 °C", "Room sensor OK", "| Forecast sun (1-9 h) | -0.60 |",
+                         "23h +0.1", "-15 °C → +1.0"):
             self.assertIn(expected, content)
         self.assertNotIn("None", content)
         set_state(E["mode"], "observe")

@@ -212,8 +212,6 @@ class DisinfectionController:
                       "restore_attempts": 0, "restore_sent_at": None}
         self.hold.reset()
         self.latched = self.manual_override = False
-        self.owner.previous = None
-        self.owner.model.emitter = None
         self.event("starting", reason)
         # Persist ownership and the original target BEFORE any device write.
         await self.save()
@@ -248,8 +246,6 @@ class DisinfectionController:
         self.latched = outcome != "completed"
         self.cycle = None
         self.hold.reset()
-        self.owner.previous = None
-        self.owner.model.emitter = None
         self.status, self.reason = outcome, reason
         self.event(outcome, reason)
         await self.save()

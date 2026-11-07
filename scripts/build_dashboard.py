@@ -172,9 +172,7 @@ def build(mapping):
         "{% set r = states('@indoor@') %}{% set t = states('@target@') %}"
         "{% if is_number(r) and is_number(t) %}{% set g = (r | float - t | float) | round(1) %}"
         "Target {{ t | float | round(1) }}° · {{ (-g) ~ '° below' if g < 0 else g ~ '° above' if g > 0 else 'on target' }}"
-        "{% else %}Room target{% endif %}"
-        "{% set c = state_attr('@status@','observed_room_cooling_celsius_per_hour') %}"
-        "{% if is_number(c) %}{{ ' ↘' if c | float > 0.05 else ' ↗' if c | float < -0.05 else ' →' }}{% endif %}",
+        "{% else %}Room target{% endif %}",
         "mdi:home-thermometer",
         "{% set r = states('@indoor@') %}{% set t = states('@target@') %}"
         "{% if is_number(r) and is_number(t) %}{% set g = r | float - t | float %}"
@@ -225,35 +223,31 @@ def build(mapping):
                          "{{ state_attr('@" + key + "@','reason') or 'Tap for details' }}",
                          icon, color, 12, nav=nav), key, states)
 
-    plan = card(
-        "{% set p = states('@planner_status@') %}{{ {'baseline':'Normal heating','disabled':'Night preparation off',"
-        "'prepare':'Preheating the floor','scheduled':'Cold-night plan ready','coast':'Coasting overnight',"
-        "'recovery':'Recovering floor heat','solar_wait':'Waiting for sunshine','ceiling_hold':'Holding at comfort ceiling'}"
-        ".get(p, 'Night plan unavailable' if p in ['unknown','unavailable'] else p | replace('_',' ') | capitalize) }}",
-        "{% set p = states('@planner_status@') %}{% set m = states('@mode@') %}"
+    cycle_names = ("{{ {'idle':'Floor resting','kick':'Starting the compressor','ride':'Heating the floor',"
+                   "'stop':'Ending the run','wait':'Waiting for hot water or defrost','hold':'Holding: no heat-pump data'}"
+                   ".get(p, 'Controller unavailable' if p in ['unknown','unavailable'] else p | capitalize) }}")
+    floor = card(
+        "{% set p = states('@cycle@') %}" + cycle_names,
+        "{% set m = states('@mode@') %}"
         "{% if m != 'automatic' %}{{ 'Suggestion only · ' if m == 'observe' else 'Not applied · ' }}{% endif %}"
-        "{% set n = namespace(at=none, label='') %}"
-        "{% for k, l in [('prepare_at','Prepare'),('recovery_at','Recover'),('morning_at','Morning')] %}"
-        "{% set at = as_datetime(state_attr('@planner_status@', k), default=none) %}"
-        "{% if at and as_timestamp(at) > as_timestamp(now()) and (n.at is none or as_timestamp(at) < as_timestamp(n.at)) %}"
-        "{% set n.at = at %}{% set n.label = l %}{% endif %}{% endfor %}"
-        "{% if p in ['baseline','disabled'] %}No extra preheating planned"
-        "{% elif n.at %}{{ n.label }} ~{{ as_local(n.at).strftime('%H:%M') }}{% else %}Tap for plan details{% endif %}",
-        "mdi:weather-night", "{{ 'grey' if states('@planner_status@') in ['baseline','disabled','unknown','unavailable'] else 'indigo' }}",
-        12, nav="plan")
+        "{% set s = state_attr('@cycle@','slab_estimate') %}{% set t = state_attr('@cycle@','slab_target') %}"
+        "{% if is_number(s) and is_number(t) %}Floor {{ s | float | round(1) }}° · target {{ t | float | round(1) }}°"
+        "{% else %}Tap for floor details{% endif %}",
+        "mdi:heating-coil",
+        "{% set p = states('@cycle@') %}{{ 'orange' if p in ['kick','ride'] else 'indigo' if p == 'stop' "
+        "else 'grey' if p in ['hold','unknown','unavailable'] else 'blue' }}",
+        12, nav="floor")
     why = card("Why",
                "{% set r = states('@reason@') %}{% if is_state('@mode@','off') %}Floor control is off."
                "{% elif r in ['unknown','unavailable',''] %}Waiting for the first evaluation.{% else %}{{ r }}{% endif %}",
                "mdi:head-lightbulb-outline", "amber", 12, entity="reason")
-    # ponytail: no predicted-minimum line while the sensor has no numeric history; add it
-    # back once the model reports predictions.
     room_series = [("indoor", "Room", "#f5a646"), ("target", "Target", "#4db6ac", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}})]
 
     home = view("Home", "home", "mdi:home-thermometer", [
         section("Heating", "mdi:fire", [chip_row, room, heat_pump, power, cop, supply, returned, water_target, tank_small,
             alert("disinfection_status", "Disinfection", ACTIVE_DISINFECTION, "red", "mdi:water-check", "water"),
-            alert("ac_status", "AC assistance", ACTIVE_AC, "indigo", "mdi:air-conditioner", "plan")]),
-        section("Next & why", "mdi:clock-outline", [plan, why, graph("Room · 24 h", room_series)]),
+            alert("ac_status", "AC assistance", ACTIVE_AC, "indigo", "mdi:air-conditioner", "floor")]),
+        section("Next & why", "mdi:clock-outline", [floor, why, graph("Room · 24 h", room_series)]),
     ])
 
     # -------------------------------------------------------------- Trends
@@ -268,7 +262,7 @@ def build(mapping):
         "{% else %}| — | ⏳ waiting for the first evaluation | — | — | — |\n{% endfor %}")
     states_history = {"type": "history-graph", "hours_to_show": 24, "grid_options": {"columns": 12},
                       "entities": [{"entity": e[key], "name": name} for key, name in (
-                          ("operating", "Heat pump"), ("status", "Control"), ("planner_status", "Plan"),
+                          ("operating", "Heat pump"), ("status", "Control"), ("cycle", "Cycle"),
                           ("ac_status", "AC")) if e.get(key)]}
     trends = view("Trends", "trends", "mdi:chart-line", [
         section("Comfort", "mdi:home-thermometer", [
@@ -289,23 +283,37 @@ def build(mapping):
         section("Activity", "mdi:timeline-clock-outline", [states_history, decisions]),
     ])
 
-    # ---------------------------------------------------------------- Plan
-    plan_view = view("Plan", "plan", "mdi:weather-night", [
-        section("Weather & night plan", "mdi:weather-partly-cloudy", [
+    # --------------------------------------------------------------- Floor
+    parts = markdown(
+        "{% set p = state_attr('@cycle@','target_parts') or {} %}"
+        "{% set names = {'target':'Room target','weather':'Forecast cold (1-9 h)','offset':'Base offset',"
+        "'sun':'Forecast sun (1-9 h)','room':'Room now','integral':'Learned level','daily':'Learned time of day',"
+        "'warm_hours':'Warmer hours ahead'} %}\n"
+        "| Floor target part | °C |\n| :-- | --: |\n"
+        "{% for k, label in names.items() %}{% if k in p %}| {{ label }} | {{ '%+.2f' | format(p[k]) if k != 'target' "
+        "else '%.1f' | format(p[k]) }} |\n{% endif %}{% endfor %}"
+        "{% if not p %}| Waiting for the controller | — |\n{% endif %}")
+    pattern = markdown(
+        "{% set d = state_attr('@cycle@','daily_pattern') or [] %}{% set f = state_attr('@cycle@','fallback_curve') or {} %}"
+        "**Learned time of day** (°C on the floor target, by hour)\n\n"
+        "{% for v in d %}{{ '%02d' | format(loop.index0) }}h {{ '%+.1f' | format(v) }}{{ ' · ' if not loop.last }}{% else %}Still learning.{% endfor %}"
+        "\n\n**Without a room thermometer** the learned level by outdoor temperature: "
+        "{% for k, v in f.items() %}{{ k }} °C → {{ '%+.1f' | format(v) }}{{ ' · ' if not loop.last }}{% else %}—{% endfor %}")
+    floor_view = view("Floor", "floor", "mdi:heating-coil", [
+        section("Floor & forecast", "mdi:weather-partly-cloudy", [
             {"type": "weather-forecast", "entity": e["weather"], "forecast_type": "hourly", "show_current": True,
              "show_forecast": True, "forecast_slots": 6, "grid_options": {"columns": 12}},
-            plan,
-            card("Plan reason", "{{ state_attr('@planner_status@','reason') or 'Waiting for the planner.' }}",
-                 "mdi:comment-text-outline", "indigo", 12, entity="planner_status"),
-            stat("planner_status", "Planned room target", "mdi:target", "green", attr="effective_target"),
-            stat("planner_status", "Projected room minimum", "mdi:thermometer-low", "blue", attr="predicted_minimum"),
-            card(val("planner_status", 2, " °C/h", "cooling_rate"),
-                 "Night cooling · {{ 'measured' if state_attr('@planner_status@','calibrated') else 'still learning' }}",
-                 "mdi:snowflake-thermometer", "light-blue", entity="planner_status"),
-            stat("planner_status", "Recovery lead time", "mdi:timer-sand", "purple", 1, " h", "effective_recovery_lead_hours"),
-            card("Prepare " + when("planner_status", "prepare_at", "%H:%M") + " · Night " + when("planner_status", "night_start", "%H:%M"),
-                 "Recover " + when("planner_status", "recovery_at", "%H:%M") + " · Morning " + when("planner_status", "morning_at", "%H:%M"),
-                 "mdi:timeline-clock-outline", "indigo", 12, entity="planner_status")]),
+            floor,
+            card("Controller reason", "{{ state_attr('@cycle@','reason') or 'Waiting for the controller.' }}",
+                 "mdi:comment-text-outline", "indigo", 12, entity="cycle"),
+            stat("slab_estimate", "Floor estimate", "mdi:texture-box", "deep-orange"),
+            stat("slab_target", "Floor target", "mdi:target", "green"),
+            card("Start below " + val("cycle", 1, "°", "start_below"),
+                 "Stop above " + val("cycle", 1, "°", "stop_above"), "mdi:arrow-up-down", "blue", 12, entity="cycle"),
+            parts,
+            graph("Floor · 24 h", [("slab_estimate", "Floor", "#ff8a65"),
+                                   ("slab_target", "Target", "#4db6ac", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}}),
+                                   ("indoor", "Room", "#f5a646")])]),
         section("AC assistance", "mdi:air-conditioner", [
             with_control(card("{{ states('@ac_status@') | replace('_',' ') | capitalize }}",
                               "AC unit {{ state_attr('@ac_status@','actual_mode') or 'unknown' }}",
@@ -317,19 +325,14 @@ def build(mapping):
             only(stat("ac_power", "AC power", "mdi:lightning-bolt", "amber", 0, " W"), "ac_power"),
             only(stat("ac_energy", "This session", "mdi:counter", "amber", 2, " kWh"), "ac_energy")]),
         section("Learning", "mdi:brain", [
-            stat("samples", "Learning samples", "mdi:school-outline", "purple", 0, ""),
-            stat("error", "Model error", "mdi:target-variant", "purple", 2, " °C"),
-            stat("prediction", "Predicted room minimum", "mdi:chart-timeline-variant", "blue"),
-            stat("proposed", "Recommended water", "mdi:thermometer-auto", "teal"),
-            stat("status", "Floor response", "mdi:timer-sand", "brown", 1, " h", "floor_response_hours"),
-            card("{% set c = state_attr('@status@','observed_room_cooling_celsius_per_hour') %}"
-                 "{% if is_number(c) %}{{ '%.2f' | format(c | float | abs) }} °C/h{% else %}—{% endif %}",
-                 "{% set c = state_attr('@status@','observed_room_cooling_celsius_per_hour') %}"
-                 "Room {{ 'trend' if not is_number(c) else 'cooling' if c | float > 0.05 else 'warming' if c | float < -0.05 else 'steady' }}",
-                 "mdi:trending-down", "blue", entity="status"),
-            card(val("status", 1, " h", "learning_heating_hours") + " heating · " + val("status", 1, " h", "learning_idle_hours") + " cooling",
-                 "Accepted learning time{{ ' · AC excluded now' if state_attr('@status@','learning_excluded_by_ac') else '' }}",
-                 "mdi:book-open-variant", "purple", 12, entity="status")]),
+            stat("cycle", "Learned level", "mdi:school-outline", "purple", 2, " °C", "learned_integral"),
+            card("{{ {'ok':'Room sensor OK','missing':'Room sensor unavailable','stale':'Room sensor silent',"
+                 "'frozen':'Room sensor stuck'}.get(state_attr('@cycle@','room_sensor'), 'Room sensor —') }}",
+                 "{{ 'Learning paused: AC influence' if state_attr('@status@','learning_excluded_by_ac') else "
+                 "'Learning while Automatic' }}", "mdi:thermometer-check", "purple", entity="cycle"),
+            stat("proposed", "Wanted water", "mdi:thermometer-auto", "teal"),
+            stat("writes", "Setpoint writes · 24 h", "mdi:pencil-outline", "brown", 0, ""),
+            pattern]),
     ])
 
     # --------------------------------------------------------------- Water
@@ -395,7 +398,7 @@ def build(mapping):
             tile("hacs_update", "Integration update", "mdi:package-up", "blue", 12)]),
     ])
 
-    return {"views": [item for item in (home, trends, plan_view, water, system) if item["sections"]]}
+    return {"views": [item for item in (home, trends, floor_view, water, system) if item["sections"]]}
 
 
 def main():

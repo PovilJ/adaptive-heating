@@ -1,10 +1,8 @@
-"""Run the actual HA adapter against an in-memory HA boundary (no device I/O)."""
+"""Run the actual HA adapter (coordinator.py) against an in-memory HA boundary (no device I/O)."""
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from dataclasses import replace
 import importlib.util
-from pathlib import Path
 import sys
 import types
 import unittest
@@ -26,12 +24,15 @@ class FakeStore:
         self.hass.storage[self.key] = data
     def async_delay_save(self, data_func, delay=0):
         self.hass.storage[self.key] = data_func()
+    async def async_remove(self):
+        self.hass.storage.pop(self.key, None)
 
 
 class FakeCoordinator:
     def __init__(self, hass, *args, **kwargs):
         self.hass = hass
         self.data = None
+        self.update_interval = kwargs.get("update_interval")
     async def async_request_refresh(self):
         self.data = await self._async_update_data()
     def async_update_listeners(self):
@@ -69,33 +70,57 @@ class State:
 
 class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.now = datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+        self.now = datetime(2026, 1, 15, 2, tzinfo=timezone.utc)
         self.clock_patch = patch.object(adapter.dt_util, "utcnow", side_effect=lambda: self.now)
         self.clock_patch.start()
         self.states = {}
         self.calls = []
+        self.forecast_outdoor = 0.0
+        self.forecast_extra = {}
         self.config = {"indoor_entity": "sensor.room", "weather_entity": "weather.house",
                        "output_entity": "number.water", "operating_entity": "sensor.operating",
-                       "inlet_entity": "sensor.return_water", "outlet_entity": "sensor.supply_water"}
-        self.set_state("sensor.room", 22, unit_of_measurement="°C")
+                       "inlet_entity": "sensor.return_water", "outlet_entity": "sensor.supply_water",
+                       "heating_mode_entity": "number.heating_mode", "heating_mode_state": "4"}
+        self.set_state("sensor.room", 21.5, unit_of_measurement="°C")
         self.set_state("weather.house", "cloudy", temperature=0, temperature_unit="°C")
-        self.set_state("number.water", 30, unit_of_measurement="°C", min=20, max=50, step=1)
-        self.set_state("sensor.operating", "HEAT")
-        self.set_state("sensor.return_water", 28, unit_of_measurement="°C")
-        self.set_state("sensor.supply_water", 32, unit_of_measurement="°C")
+        self.set_state("number.water", 25, unit_of_measurement="°C", min=20, max=50, step=1)
+        self.set_state("number.heating_mode", "4.0")
+        self.set_state("sensor.operating", "OFF")
+        self.set_state("sensor.return_water", 24.3, unit_of_measurement="°C")
+        self.set_state("sensor.supply_water", 24.0, unit_of_measurement="°C")
+
         async def service(domain, name, data, **kwargs):
             self.calls.append((domain, name, data))
             if domain == "number":
-                self.set_state("number.water", data["value"], **self.states["number.water"].attributes)
+                self.set_state(data["entity_id"], data["value"], **self.states[data["entity_id"]].attributes)
                 return None
-            return {"weather.house": {"forecast": [{"datetime": (self.now + timedelta(hours=i)).isoformat(), "temperature": 0} for i in range(12)]}}
+            if domain == "weather":
+                return {"weather.house": {"forecast": [
+                    {"datetime": (self.now.replace(minute=0) + timedelta(hours=i)).isoformat(),
+                     "temperature": self.forecast_outdoor, "cloud_coverage": 100} | self.forecast_extra
+                    for i in range(48)]}}
+            return None
+        self.echo = True   # the device shows a written value
+        self.fail_writes = False
+
+        async def service_with_device(domain, name, data, **kwargs):
+            if domain == "number" and self.fail_writes:
+                self.calls.append((domain, name, data))
+                raise HAError("device unreachable")
+            if domain == "number" and not self.echo:
+                self.calls.append((domain, name, data))
+                return None
+            return await service(domain, name, data, **kwargs)
         self.hass = types.SimpleNamespace(states=types.SimpleNamespace(get=self.states.get),
-            storage={}, is_running=True, services=types.SimpleNamespace(async_call=service))
+            storage={}, is_running=True, services=types.SimpleNamespace(async_call=service_with_device))
         self.entry = types.SimpleNamespace(data=self.config, options={}, entry_id="test", title="Test heating")
         self.releases = types.SimpleNamespace(restart_pending=False)
-        self.controller = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        self.controller.started = self.now - timedelta(hours=1)
-        await self.controller.async_load()
+        self.controller = await self.new_controller()
+
+    async def new_controller(self):
+        controller = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
+        await controller.async_load()
+        return controller
 
     async def asyncTearDown(self):
         self.clock_patch.stop()
@@ -106,419 +131,216 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
     def writes(self):
         return [call for call in self.calls if call[0] == "number"]
 
-    async def test_observe_calculates_without_actuation(self):
+    async def minutes(self, n, **changes):
+        for _ in range(n):
+            self.now += timedelta(minutes=1)
+            for entity, value in changes.items():
+                state = self.states[entity]
+                self.set_state(entity, value, **state.attributes)
+            await self.controller.async_request_refresh()
+
+    # ------------------------------------------------------------------ modes
+    async def test_observe_decides_without_actuation(self):
         await self.controller.async_request_refresh()
-        self.assertIsNotNone(self.controller.data["proposed"])
-        self.assertEqual(self.writes(), [])
+        data = self.controller.data
         self.assertEqual(self.controller.mode, "observe")
-
-    async def test_predictive_plan_replaces_the_curve_when_location_and_forecast_exist(self):
-        self.hass.config = types.SimpleNamespace(latitude=54.7, longitude=25.3)
-        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
-        self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
-        self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
-        self.controller.forecast_checked = self.now
-        await self.controller.async_request_refresh()
-        self.now += timedelta(minutes=30)
-        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertIn("Predictive plan", self.controller.data["reason"])
-        self.assertIn("no heat while the room is over its band", self.controller.data["reason"])
-        self.assertEqual(self.controller.data["proposed"], self.controller.settings.minimum_water)
-        self.assertEqual(self.controller.data["limited"], self.controller.settings.minimum_water)  # not slowed by the fall limit
-        self.assertEqual(len(self.controller.data["plan"]), 24)
-        self.controller.config["predictive"] = False
-        self.now += timedelta(minutes=30)
-        self.set_state("sensor.room", 23.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertIn("Weather compensation", self.controller.data["reason"])
-
-    def test_room_is_averaged_over_half_an_hour_of_sensor_changes(self):
-        self.controller.note_room(22.0, self.now - timedelta(minutes=40))
-        self.controller.note_room(22.6, self.now - timedelta(minutes=5))  # an oven, not the floor
-        self.assertAlmostEqual(self.controller.room(self.now, 22.6), 22.1)
-        self.assertEqual(self.controller.room(self.now, 22.4), 22.4)  # a missed change: trust the sensor
-
-    async def test_a_run_keeps_going_for_its_first_hour(self):
-        self.hass.config = types.SimpleNamespace(latitude=54.7, longitude=25.3)
-        self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
-        self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
-        self.controller.forecast_checked = self.now
-        mpc = adapter.mpc
-        idle = mpc.Plan(25.0, [25.0] * len(mpc.BLOCKS), [25.0] * mpc.HORIZON_STEPS, [22.2] * mpc.HORIZON_STEPS, 0.0, 0.0)
-        with patch.object(mpc, "plan", return_value=idle):  # the plan itself wants no heat
-            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.now += timedelta(minutes=30)
-            self.controller.note_operating_event("sensor.operating", "HEAT", self.now - timedelta(minutes=20))
-            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.assertIn("kept running until the compressor has run an hour", self.controller.data["reason"])
-            self.assertGreaterEqual(self.controller.data["proposed"], 30)  # never lowered mid-run, clear of the 28 °C return
-            self.now += timedelta(minutes=50)
-            self.set_state("sensor.room", 22.2, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.assertNotIn("kept running", self.controller.data["reason"])
-
-    def planning(self):
-        self.hass.config = types.SimpleNamespace(latitude=54.7, longitude=25.3)
-        self.controller.forecast_rows = [(self.now + timedelta(hours=i), 8.0, 90.0) for i in range(40)]
-        self.controller.forecast_cache = [(t, v) for t, v, _ in self.controller.forecast_rows]
-        self.controller.forecast_checked = self.now
-
-    def wanting(self, water):
-        mpc = adapter.mpc
-        return mpc.Plan(water, [water] * len(mpc.BLOCKS), [water] * mpc.HORIZON_STEPS, [22.0] * mpc.HORIZON_STEPS, 5.0, 1.0)
-
-    async def test_the_hot_loop_after_hot_water_does_not_raise_the_setpoint(self):
-        # 17 Oct 2026, 07:11: the tank had just been heated, the return read 38 °C and 40 °C was requested.
-        self.planning()
-        self.set_state("sensor.return_water", 38, unit_of_measurement="°C")
-        self.set_state("sensor.supply_water", 40, unit_of_measurement="°C")
-        with patch.object(adapter.mpc, "plan", return_value=self.wanting(30.0)):
-            self.set_state("sensor.room", 21.9, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.now += timedelta(minutes=30)
-            self.controller.note_operating_event("sensor.operating", "HOT WATER", self.now - timedelta(minutes=25))
-            self.controller.note_operating_event("sensor.operating", "HEAT", self.now - timedelta(minutes=2))
-            self.set_state("sensor.room", 21.9, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-        self.assertLessEqual(self.controller.data["proposed"], 31)
-        self.assertEqual(self.controller.start_gaps, [])  # a start straight out of hot water says nothing
-
-    async def test_an_idle_compressor_is_started_clear_of_its_outlet(self):
-        self.config.update(heating_mode_entity="number.mode", heating_mode_state="4")
-        self.controller = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        self.controller.started = self.now - timedelta(hours=1)
-        await self.controller.async_load()
-        self.set_state("number.mode", 4)
-        self.set_state("sensor.operating", "OFF")
-        self.set_state("sensor.supply_water", 30, unit_of_measurement="°C")
-        self.planning()
-        with patch.object(adapter.mpc, "plan", return_value=self.wanting(33.0)):
-            self.set_state("sensor.room", 21.9, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.now += timedelta(minutes=30)
-            self.set_state("sensor.room", 21.9, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.data["proposed"], 35)  # outlet 30 + the 5 °C default gap
-        self.assertIn("raised clear of the outlet so the compressor starts", self.controller.data["reason"])
-
-    def test_start_gaps_are_learned_from_real_starts(self):
-        self.set_state("number.water", 30, unit_of_measurement="°C", min=20, max=50, step=1)
-        self.set_state("sensor.supply_water", 25.4, unit_of_measurement="°C")
-        self.controller.note_operating_event("sensor.operating", "OFF", self.now - timedelta(hours=1))
-        self.controller.note_operating_event("sensor.operating", "HEAT", self.now)
-        self.assertEqual(self.controller.start_gaps, [4.6])
-        self.controller.note_operating_event("sensor.operating", "HEAT", self.now + timedelta(minutes=5))
-        self.assertEqual(self.controller.start_gaps, [4.6])  # still the same run
-
-    async def test_learning_is_logged_kept_across_restarts_and_reset_for_another_house(self):
-        self.config["electric_energy_entity"] = "sensor.energy"
-        self.controller = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        self.controller.started = self.now - timedelta(hours=1)
-        await self.controller.async_load()
-        for i in range(4):
-            self.set_state("sensor.energy", 100 + 0.5 * i, unit_of_measurement="kWh")
-            self.set_state("sensor.room", 22.0, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.now += timedelta(minutes=30)
-        rows = self.controller.log.rows
-        self.assertEqual(len(rows), 3)
-        self.assertGreater(rows[0].heat, 0)
-        again = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await again.async_load()
-        self.assertEqual(len(again.log.rows), 3)
-        self.config["inlet_entity"] = "sensor.other_return"
-        other = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await other.async_load()
-        self.assertEqual(other.log.rows, [])
-
-    async def test_an_adopted_refit_replaces_the_house_and_restarts_the_drift(self):
-        learn = adapter.learn
-        async def executor(function, *args):
-            return function(*args)
-        self.hass.async_add_executor_job = executor
-        leakier = replace(adapter.mpc.House(), loss=0.009, restart_gap=4.5)
-        report = learn.Report(self.now.timestamp(), 400, 90, 0.4, 0.3, True, "Adopted refitted house values")
-        self.controller.estimate.bias = -0.04
-        with patch.object(learn, "refit", return_value=(leakier, report)):
-            await self.controller.async_refit(self.now, (54.7, 25.3))
-        self.assertEqual(self.controller.house, leakier)
-        self.assertEqual(self.controller.estimate.bias, 0.0)
-        attributes = self.controller.learning_attributes()
-        self.assertEqual(attributes["restart_gap_celsius"], 4.5)
-        self.assertEqual(attributes["forecast_error_after_celsius"], 0.3)
-        self.assertFalse(self.controller.refitting)
-        with patch.object(learn, "refit", side_effect=RuntimeError("boom")):
-            await self.controller.async_refit(self.now, (54.7, 25.3))
-        self.assertEqual(self.controller.house, leakier)  # a failed refit keeps the values
-
-    async def test_paused_controller_looks_again_within_minutes(self):
-        self.set_state("sensor.room", "unavailable")
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.data["status"], "paused")
-        self.assertEqual(self.controller.update_interval, timedelta(minutes=2))
-        self.set_state("sensor.room", 21.5, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.update_interval, timedelta(minutes=30))
-
-    def falling_history(self, start=21.9, end=21.5):
-        self.controller.room_history = [(self.now - timedelta(minutes=30 - 5 * i),
-            start + (end - start) * i / 6) for i in range(7)]
-        self.set_state("sensor.room", end, unit_of_measurement="°C")
-
-    async def test_falling_cold_room_holds_floor_water_through_final_limits(self):
-        self.set_state("weather.house", "cloudy", temperature=16.5, temperature_unit="°C")
-        self.set_state("number.water", 35, unit_of_measurement="°C", min=20, max=50, step=1)
-        self.falling_history(21.6, 21.4)
-        self.controller.forecast_cache = [(self.now + timedelta(hours=i), 16.5) for i in range(12)]
-        self.controller.forecast_checked = self.now
-        await self.controller.async_mode("automatic")
-        self.assertEqual(self.controller.data["proposed"], 35)
-        self.assertEqual(self.controller.data["limited"], 35)
+        self.assertEqual(data["status"], "observing")
+        self.assertTrue(data["reason"].startswith("Observe: Starting the compressor"))
+        self.assertEqual(data["proposed"], 28.0)
+        self.assertEqual(data["cycle"], "kick")
         self.assertEqual(self.writes(), [])
-        self.assertIn("holding floor heat", self.controller.data["reason"])
+        self.assertEqual(self.controller.core.integ, 0.0)  # Observe does not learn
 
-    async def test_day_one_forecast_preparation_keeps_final_command_rate_limited(self):
-        self.set_state("weather.house", "cloudy", temperature=5, temperature_unit="°C")
-        self.controller.forecast_cache = [(self.now + timedelta(hours=i), -20) for i in range(12)]
-        self.controller.forecast_checked = self.now
+    async def test_one_minute_cadence_and_ten_minute_saves(self):
+        self.assertEqual(self.controller.update_interval, timedelta(minutes=1))
+        saves = []
+        self.controller.store.async_delay_save = lambda func, delay=0: saves.append(self.now)
+        await self.minutes(25)
+        self.assertEqual(len(saves), 3)
+
+    async def test_off_does_not_step_the_controller(self):
+        await self.controller.async_mode("off")
+        self.assertEqual(self.controller.data["status"], "off")
+        self.assertIsNone(self.controller.core.last_minute)
+
+    async def test_automatic_kicks_a_cold_floor_with_the_smallest_restart_setpoint(self):
         await self.controller.async_mode("automatic")
-        self.assertEqual(self.controller.data["proposed"], 40)
-        self.assertEqual(self.writes()[-1][2]["value"], 32)
-        self.assertIn("preparing before", self.controller.data["reason"])
-        self.assertIsNone(self.controller.data["prediction"])
-
-    async def test_one_sensor_step_does_not_trigger_room_trend_recovery(self):
-        await self.controller.async_request_refresh()
-        self.now += timedelta(minutes=5)
-        self.set_state("sensor.room", 21.9, unit_of_measurement="°C")
-        await self.controller.async_request_refresh()
-        self.assertIsNone(self.controller.data["observed_cooling_rate"])
-        self.assertEqual(self.controller.data["cooling_compensation"], 0)
-
-    async def test_tank_pause_preserves_room_trend_without_sending_floor_command(self):
-        self.falling_history()
-        self.set_state("sensor.operating", "HOT WATER")
-        await self.controller.async_mode("automatic")
-        self.assertGreater(self.controller.data["observed_cooling_rate"], 0)
-        self.assertEqual(self.writes(), [])
-        self.assertEqual(self.controller.data["recovery_boost"], 0)
-
-    async def test_manual_ac_clears_room_trend_and_recovery_assistance(self):
-        self.controller.config["ac_entity"] = "climate.living"
-        self.set_state("climate.living", "heat", temperature=22, hvac_action="heating")
-        self.falling_history()
-        self.controller.recovery.boost = 2
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.room_history, [])
-        self.assertIsNone(self.controller.data["observed_cooling_rate"])
-        self.assertEqual(self.controller.data["recovery_boost"], 0)
-
-    async def test_stalled_recovery_adds_bounded_help_only_after_floor_response(self):
-        self.set_state("sensor.room", 21.5, unit_of_measurement="°C")
-        for _ in range(43):
-            self.set_state("sensor.room", 21.5, unit_of_measurement="°C")
-            self.set_state("weather.house", "cloudy", temperature=0, temperature_unit="°C")
-            self.set_state("sensor.return_water", 28, unit_of_measurement="°C")
-            self.set_state("sensor.supply_water", 32, unit_of_measurement="°C")
-            await self.controller.async_request_refresh()
-            self.now += timedelta(minutes=5)
-        self.assertEqual(self.controller.data["recovery_boost"], .5)
-        self.assertIn("gradual assistance", self.controller.data["reason"])
-        self.assertEqual(self.writes(), [])
-
-    async def test_automatic_logs_actual_bounded_command(self):
-        await self.controller.async_mode("automatic")
-        self.assertEqual(self.writes()[0][2]["value"], 32)
-        self.assertEqual(self.controller.data["commanded"], 32)
-        self.assertGreater(self.controller.data["proposed"], 32)
-
-    async def test_run_now_does_not_bypass_rate_or_time_limits(self):
-        await self.controller.async_mode("automatic")
-        for _ in range(5):
-            await self.controller.async_request_refresh()
-        self.assertEqual(len(self.writes()), 1)
-
-    async def test_hot_water_state_blocks_commands(self):
-        self.set_state("sensor.operating", "HOT WATER")
-        await self.controller.async_mode("automatic")
-        self.assertEqual(self.writes(), [])
-        self.assertEqual(self.controller.data["status"], "paused")
-        self.assertEqual(self.controller.model.samples, 0)
-
-    def map_heating_mode(self, value="4.0"):
-        self.controller.config.update(heating_mode_entity="number.heating_mode", heating_mode_state="4")
-        self.set_state("number.heating_mode", value)
-
-    async def test_enabled_heating_adjusts_water_while_compressor_is_idle(self):
-        self.map_heating_mode()
-        self.set_state("sensor.operating", "OFF")
-        self.set_state("sensor.room", 21.7, unit_of_measurement="°C")
-        self.states["number.heating_mode"].last_reported = self.now - timedelta(days=30)
-        await self.controller.async_mode("automatic")
-        self.assertEqual(len(self.writes()), 1)
-        self.assertGreater(self.controller.data["proposed"], 30)
+        # ceil(return 24.3 - 0.8 + restart hysteresis 4 (option default) + 0.15) = 28
+        self.assertEqual(self.writes()[-1][2]["value"], 28)
         self.assertEqual(self.controller.data["status"], "command_sent")
-        self.assertTrue(self.controller.snapshot(self.now)["eligible"])
-        for _ in range(3):
-            self.now += timedelta(minutes=5)
-            await self.controller.async_request_refresh()
-        # Three five-minute intervals are far too short to say anything about a slab.
-        self.assertEqual(self.controller.model.samples, 0)
+        self.assertEqual(self.controller.data["commanded"], 28)
+        self.assertEqual(self.controller.data["cycle"], "kick")
 
-    async def night_of_refreshes(self, hours):
-        for _ in range(int(hours * 12)):
-            self.now += timedelta(minutes=5)
-            for entity, state in list(self.states.items()):
-                self.set_state(entity, state.state, **state.attributes)
-            await self.controller.async_request_refresh()
-
-    async def test_response_learning_needs_hours_of_night_and_stops_in_daylight(self):
-        self.now = self.now.replace(hour=22, minute=0)
-        await self.controller.async_request_refresh()
-        await self.night_of_refreshes(1.9)
-        self.assertEqual(self.controller.model.samples, 0)
-        await self.night_of_refreshes(1.3)
-        learned = self.controller.model.samples
-        self.assertIn(learned, (2, 3))
-        self.assertAlmostEqual(self.controller.model.heating_hours, learned / 2)
-        self.now = self.now.replace(hour=12)
-        await self.controller.async_request_refresh()
-        await self.night_of_refreshes(3)
-        self.assertEqual(self.controller.model.samples, learned)
-
-    async def test_first_run_starts_from_the_original_scripts_learned_values(self):
-        self.set_state("input_number.heating_k_loss", "0.01567")
-        self.set_state("input_number.heating_k_gain", "0.03318")
-        await self.controller.async_load()
-        await self.controller.async_request_refresh()
-        self.assertEqual((self.controller.model.loss, self.controller.model.gain), (0.01567, 0.03318))
-        self.set_state("input_number.heating_k_loss", "0.03")
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.model.loss, 0.01567)
-
-    async def test_tank_heating_still_observes_floor_cooling(self):
-        await self.controller.async_request_refresh()
-        stored = self.controller.model.emitter
-        self.now += timedelta(minutes=5)
-        self.set_state("sensor.operating", "HOT WATER")
-        self.set_state("sensor.return_water", 60, unit_of_measurement="°C")
-        self.set_state("sensor.supply_water", 65, unit_of_measurement="°C")
-        self.controller.note_operating_event("sensor.operating", "HOT WATER", self.now - timedelta(minutes=5))
-        await self.controller.async_request_refresh()
-        self.now += timedelta(minutes=5)
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.writes(), [])
+    async def test_the_restart_hysteresis_register_is_read_when_mapped(self):
+        self.config["restart_hysteresis_entity"] = "number.restart_delta"
+        self.set_state("number.restart_delta", 5)
+        self.controller = await self.new_controller()
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes()[-1][2]["value"], 29)
+        self.assertNotIn(("number", "set_value", {"entity_id": "number.restart_delta"}), self.calls)
+        self.assertTrue(all(call[2]["entity_id"] == "number.water" for call in self.writes()))
+        self.set_state("number.restart_delta", "unavailable")
+        await self.minutes(1)
         self.assertEqual(self.controller.data["status"], "paused")
-        self.assertTrue(self.controller.previous["compressor_active"])
-        self.assertFalse(self.controller.previous["floor_heating_active"])
-        self.assertLess(self.controller.model.emitter, stored)
 
-    async def test_short_compressor_cycle_is_measured_between_polls(self):
-        self.map_heating_mode()
-        self.set_state("sensor.operating", "OFF")
-        await self.controller.async_request_refresh()
-        self.controller.note_operating_event("sensor.operating", "HEAT", self.now + timedelta(seconds=60))
-        self.controller.note_operating_event("sensor.operating", "OFF", self.now + timedelta(seconds=180))
-        self.now += timedelta(minutes=5)
-        await self.controller.async_request_refresh()
-        self.assertAlmostEqual(self.controller.previous["compressor_on_fraction"], .4)
+    async def test_a_run_rides_then_stops_with_one_write(self):
+        await self.controller.async_mode("automatic")
+        self.set_state("sensor.operating", "HEAT")
+        await self.minutes(2, **{"sensor.return_water": 26.0, "sensor.supply_water": 29.5})
+        self.assertEqual(self.controller.data["cycle"], "ride")
+        rides = len(self.writes())
+        self.assertGreaterEqual(rides, 2)
+        # the floor warms far past its target; after the hour minimum the run ends with one write
+        await self.minutes(70, **{"sensor.room": 22.6, "sensor.return_water": 34.0, "sensor.supply_water": 37.0})
+        stop = self.writes()[-1][2]["value"]
+        self.assertEqual(stop, 25)
+        self.assertFalse(self.controller.core.run)
+        self.assertLess(len(self.writes()) - rides, 6)
 
-    async def test_short_unavailable_activity_interval_does_not_fit(self):
-        await self.controller.async_request_refresh()
-        self.controller.note_operating_event("sensor.operating", None, self.now + timedelta(seconds=60))
-        self.controller.note_operating_event("sensor.operating", "HEAT", self.now + timedelta(seconds=180))
-        self.now += timedelta(minutes=5)
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.controller.model.samples, 0)
+    async def test_running_unit_is_adopted_when_automatic_is_selected(self):
+        self.set_state("sensor.operating", "HEAT")
+        self.set_state("number.water", 30, unit_of_measurement="°C", min=20, max=50, step=1)
+        self.set_state("sensor.room", 22.6, unit_of_measurement="°C")
+        self.set_state("sensor.return_water", 27.0, unit_of_measurement="°C")
+        self.set_state("sensor.supply_water", 30.0, unit_of_measurement="°C")
+        await self.minutes(30)   # Observe: the controller's own view says no run is needed
+        self.assertFalse(self.controller.core.run)
+        await self.controller.async_mode("automatic")
+        self.assertTrue(self.controller.core.run)
+        self.assertNotEqual(self.controller.core.note, "unowned")
 
-    async def test_configured_floor_response_time_survives_reload(self):
-        self.entry.options = {"thermal_response_hours": 6}
-        other = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        self.assertEqual(other.model.lag_hours, 6)
-        await other.async_save()
-        restored = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await restored.async_load()
-        self.assertEqual(restored.model.lag_hours, 6)
-
-    async def test_idle_without_heating_mode_confirmation_stays_blocked(self):
-        self.set_state("sensor.operating", "OFF")
+    # ------------------------------------------------------------------ gates
+    async def test_hot_water_waits_without_writing(self):
+        self.set_state("sensor.operating", "HOT WATER")
         await self.controller.async_mode("automatic")
         self.assertEqual(self.writes(), [])
-        self.assertEqual(self.controller.data["status"], "paused")
+        self.assertEqual(self.controller.data["cycle"], "wait")
 
-    async def test_disabled_or_unavailable_heating_mode_blocks_even_running_compressor(self):
-        for value in ("3", "unknown", "unavailable", "invalid"):
+    async def test_disabled_or_unavailable_heating_mode_writes_nothing(self):
+        for value in ("3", "unavailable"):
             with self.subTest(value=value):
-                self.map_heating_mode(value)
+                self.set_state("number.heating_mode", value)
                 await self.controller.async_mode("automatic")
                 self.assertEqual(self.writes(), [])
                 self.assertEqual(self.controller.data["status"], "paused")
-        del self.states["number.heating_mode"]
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.writes(), [])
 
-    async def test_enabled_mode_keeps_hot_water_unknown_and_defrost_blocked(self):
-        self.map_heating_mode()
-        for value in ("HOT WATER", "unknown", "unavailable", "COOL"):
-            self.set_state("sensor.operating", value)
-            await self.controller.async_mode("automatic")
-            self.assertEqual(self.writes(), [])
-        self.controller.config["heating_idle_state"] = "HOT WATER"
-        self.set_state("sensor.operating", "HOT WATER")
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.writes(), [])
-        self.controller.config["heating_idle_state"] = "OFF"
-        self.controller.config["defrost_entity"] = "binary_sensor.defrost"
-        self.set_state("sensor.operating", "OFF")
-        self.set_state("binary_sensor.defrost", "on")
-        await self.controller.async_request_refresh()
-        self.assertEqual(self.writes(), [])
-
-    async def test_heating_mode_change_during_calculation_blocks_command(self):
-        self.map_heating_mode()
-        self.set_state("sensor.operating", "OFF")
-        original = self.hass.services.async_call
-        async def change_mode(domain, name, data, **kwargs):
-            if domain == "weather":
-                self.set_state("number.heating_mode", 3)
-            return await original(domain, name, data, **kwargs)
-        self.hass.services.async_call = change_mode
+    async def test_without_a_heating_mode_mapping_automatic_explains_itself(self):
+        del self.config["heating_mode_entity"]
+        self.controller = await self.new_controller()
         await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes(), [])
+        self.assertIn("heating-mode entity", self.controller.data["reason"])
+
+    async def test_inhibit_and_defrost(self):
+        self.controller.config["inhibit_entity"] = "input_boolean.old_controller"
+        self.set_state("input_boolean.old_controller", "on")
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes(), [])
+        self.assertIn("Another controller", self.controller.data["reason"])
+        self.set_state("input_boolean.old_controller", "off")
+        self.controller.config["defrost_entity"] = "binary_sensor.defrost"
+        self.set_state("binary_sensor.defrost", "on")
+        await self.minutes(1)
+        self.assertEqual(self.writes(), [])
+        self.set_state("binary_sensor.defrost", "unavailable")
+        await self.minutes(1)
         self.assertEqual(self.writes(), [])
         self.assertEqual(self.controller.data["status"], "paused")
 
-    async def test_new_mode_mapping_resets_heating_model(self):
-        self.controller.model.samples = 100
-        await self.controller.async_save()
-        self.entry.options = {"heating_mode_entity": "number.heating_mode", "heating_mode_state": "4"}
-        other = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await other.async_load()
-        self.assertEqual(other.model.samples, 0)
+    async def test_unit_link_down_holds_and_keeps_the_learning(self):
+        await self.controller.async_mode("automatic")
+        self.assertTrue(self.controller.core.run)
+        count = len(self.writes())
+        self.set_state("sensor.return_water", "unavailable")
+        await self.minutes(10)
+        self.assertEqual(len(self.writes()), count)
+        self.assertEqual(self.controller.data["status"], "paused")
+        self.assertEqual(self.controller.data["cycle"], "hold")
+        self.assertGreater(self.controller.core.integ, 0.0)  # the room is still known: learning goes on
+        self.set_state("sensor.return_water", 24.3, unit_of_measurement="°C")
+        await self.minutes(1)
+        self.assertTrue(self.controller.core.run, "a link drop is not a handover: the run continues")
 
-    async def test_defrost_and_other_controller_gate(self):
-        for key, entity in (("defrost_entity", "binary_sensor.defrost"), ("inhibit_entity", "input_boolean.old_controller")):
-            self.controller.config[key] = entity
-            self.set_state(entity, "on")
+    async def test_disinfection_pauses_writes(self):
+        with patch.object(type(self.controller.disinfection), "blocks_heating", new=True):
             await self.controller.async_mode("automatic")
-            self.assertEqual(self.writes(), [])
-            self.set_state(entity, "off")
-
-    async def test_stale_indoor_temperature_blocks_writes(self):
-        self.states["sensor.room"].last_reported = self.now - timedelta(hours=3)
-        await self.controller.async_mode("automatic")
         self.assertEqual(self.writes(), [])
-        self.assertIn("stale", self.controller.data["reason"])
+        self.assertIn("disinfection", self.controller.data["reason"])
 
-    async def test_unchanged_output_and_helper_do_not_become_stale(self):
-        self.states["number.water"].last_reported = self.now - timedelta(days=30)
-        self.controller.config["inhibit_entity"] = "input_boolean.old_controller"
-        self.set_state("input_boolean.old_controller", "off")
-        self.states["input_boolean.old_controller"].last_reported = self.now - timedelta(days=30)
+    async def test_a_lost_room_sensor_keeps_heating_on_the_fallback_curve_and_alerts(self):
+        self.states["sensor.room"].last_reported = self.now - timedelta(hours=5)
         await self.controller.async_mode("automatic")
+        self.assertEqual(self.controller.core.room_state, "stale")
+        self.assertEqual(self.writes()[-1][2]["value"], 28)
+        self.assertIn("learned outdoor curve", self.controller.data["reason"])
+        await self.minutes(61)
+        notices = [c for c in self.calls if c[0] == "persistent_notification"]
+        self.assertEqual([c[1] for c in notices], ["create"])
+        await self.minutes(1, **{"sensor.room": 21.6})
+        notices = [c for c in self.calls if c[0] == "persistent_notification"]
+        self.assertEqual([c[1] for c in notices], ["create", "dismiss"])
+
+    async def test_manual_change_holds_until_explicit_resume(self):
+        await self.controller.async_mode("automatic")
+        self.set_state("number.water", 35, unit_of_measurement="°C", min=20, max=50, step=1)
+        await self.minutes(1)
+        self.assertTrue(self.controller.manual_hold)
+        self.assertEqual(self.notices("hold"), [("create", "hold")])
+        self.assertIn("changed outside", self.controller.data["reason"])
+        count = len(self.writes())
+        await self.minutes(10)
+        self.assertEqual(len(self.writes()), count)
+        await self.controller.async_mode("observe")
+        self.assertEqual(len(self.writes()), count, "a value set by hand is not replaced when Automatic ends")
+        await self.controller.async_mode("automatic")
+        self.assertFalse(self.controller.manual_hold)
+
+    def notices(self, kind=None):
+        return [(c[1], c[2]["notification_id"].rsplit("_", 1)[-1]) for c in self.calls
+                if c[0] == "persistent_notification" and (kind is None or c[2]["notification_id"].endswith(kind))]
+
+    async def test_an_unconfirmed_command_is_asked_again_then_pauses_and_notifies(self):
+        self.echo = False
+        await self.controller.async_mode("automatic")
+        self.assertEqual([c[2]["value"] for c in self.writes()], [28])
+        await self.minutes(4)
+        self.assertFalse(self.controller.manual_hold, "the device gets five minutes to show the value")
         self.assertEqual(len(self.writes()), 1)
+        await self.minutes(2)
+        self.assertEqual(len(self.writes()), 2, "the same setpoint is asked once more")
+        self.assertFalse(self.controller.manual_hold)
+        await self.minutes(6)
+        self.assertTrue(self.controller.manual_hold)
+        self.assertEqual(self.controller.hold_kind, "unconfirmed")
+        self.assertEqual(self.notices("hold"), [("create", "hold")])
+        count = len(self.writes())
+        await self.minutes(10)
+        self.assertEqual(len(self.writes()), count)
+        self.echo = True
+        await self.controller.async_mode("automatic")
+        self.assertFalse(self.controller.manual_hold)
+        self.assertEqual(self.notices("hold"), [("create", "hold"), ("dismiss", "hold")])
+
+    async def test_a_late_echo_confirms_the_command(self):
+        self.echo = False
+        await self.controller.async_mode("automatic")
+        await self.minutes(3)
+        self.set_state("number.water", 28, unit_of_measurement="°C", min=20, max=50, step=1)
+        await self.minutes(10)
+        self.assertFalse(self.controller.manual_hold)
+
+    async def test_failed_commands_are_not_counted_and_pause_after_three(self):
+        self.fail_writes = True
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.controller.data["status"], "paused")
+        self.assertIn("trying again", self.controller.data["reason"])
+        self.assertEqual(len(self.controller.core.wlog), 0, "a failed write does not spend the budget")
+        await self.minutes(2)
+        self.assertEqual(len(self.writes()), 3)
+        self.assertTrue(self.controller.manual_hold)
+        self.assertEqual(self.controller.hold_kind, "failed")
+        await self.minutes(5)
+        self.assertEqual(len(self.writes()), 3)
 
     async def test_disabled_while_forecast_in_flight_cannot_write(self):
         entered, proceed = asyncio.Event(), asyncio.Event()
@@ -537,47 +359,16 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(automatic, observe)
         self.assertEqual(self.writes(), [])
 
-    async def test_manual_change_holds_until_explicit_resume(self):
-        await self.controller.async_mode("automatic")
-        self.now += timedelta(minutes=31)
-        self.set_state("number.water", 35, unit_of_measurement="°C", min=20, max=50, step=1)
-        await self.controller.async_request_refresh()
-        self.assertTrue(self.controller.manual_hold)
-        self.assertEqual(len(self.writes()), 1)
-
-    async def test_command_not_confirmed_stops_further_writes(self):
-        await self.controller.async_mode("automatic")
-        self.set_state("number.water", 30, unit_of_measurement="°C", min=20, max=50, step=1)
-        self.now += timedelta(minutes=5)
-        await self.controller.async_request_refresh()
-        self.assertTrue(self.controller.manual_hold)
-        self.assertEqual(len(self.writes()), 1)
-
-    async def test_restart_restores_target_but_does_not_enable_writes(self):
-        await self.controller.async_target(23)
-        await self.controller.async_mode("automatic")
-        other = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await other.async_load()
-        self.assertEqual(other.settings.target, 23)
-        self.assertEqual(other.mode, "observe")
-
-    async def test_changed_house_mapping_resets_learned_model(self):
-        self.controller.model.samples = 100
-        await self.controller.async_save()
-        self.entry.options = {"indoor_entity": "sensor.another_room"}
-        other = adapter.HeatingCoordinator(self.hass, self.entry, self.releases)
-        await other.async_load()
-        self.assertEqual(other.model.samples, 0)
-
-    async def test_missing_forecast_keeps_normal_temperature_control(self):
-        async def no_weather(domain, name, data, **kwargs):
+    async def test_heating_mode_change_during_forecast_blocks_the_write(self):
+        original = self.hass.services.async_call
+        async def change_mode(domain, name, data, **kwargs):
             if domain == "weather":
-                raise HAError("Weather unavailable")
-            self.calls.append((domain, name, data))
-        self.hass.services.async_call = no_weather
+                self.set_state("number.heating_mode", 3)
+            return await original(domain, name, data, **kwargs)
+        self.hass.services.async_call = change_mode
         await self.controller.async_mode("automatic")
-        self.assertEqual(len(self.writes()), 1)
-        self.assertIn("forecast unavailable", self.controller.data["reason"])
+        self.assertEqual(self.writes(), [])
+        self.assertEqual(self.controller.data["status"], "paused")
 
     async def test_restart_required_prevents_automatic_mode(self):
         self.releases.restart_pending = True
@@ -585,36 +376,270 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
             await self.controller.async_mode("automatic")
 
     async def test_fahrenheit_output_is_written_in_its_own_unit(self):
-        self.set_state("number.water", 86, unit_of_measurement="°F", min=68, max=122, step=1.8)
+        self.set_state("number.water", 77, unit_of_measurement="°F", min=68, max=122, step=1.8)
         await self.controller.async_mode("automatic")
-        self.assertAlmostEqual(self.writes()[0][2]["value"], 89.6)
-        self.assertEqual(self.controller.data["commanded"], 32)
+        self.assertAlmostEqual(self.writes()[0][2]["value"], 82.4)
+        self.assertEqual(self.controller.data["commanded"], 28)
 
-    async def test_dhw_transition_during_forecast_blocks_final_write(self):
+    async def test_device_range_bounds_the_controller(self):
+        self.set_state("number.water", 25, unit_of_measurement="°C", min=25, max=27, step=1)
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes()[-1][2]["value"], 27)
+        await self.minutes(30)
+        self.assertEqual(len(self.writes()), 1, "a value the device cannot take is not written again")
+        self.assertEqual((self.controller.core.p.write_min, self.controller.core.p.write_max), (25, 27))
+
+    async def test_maximum_water_caps_every_write(self):
+        self.entry.options = {"maximum_water": 27.0}
+        self.controller = await self.new_controller()
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes()[-1][2]["value"], 27)
+
+    # ------------------------------------------------------------------ inputs
+    async def test_forecast_hours_carry_sun_from_cloud_cover(self):
+        self.hass.config = types.SimpleNamespace(latitude=52.5, longitude=13.4)
+        self.now = datetime(2026, 3, 20, 8, tzinfo=timezone.utc)
+        self.forecast_extra = {"cloud_coverage": None, "condition": "sunny"}
+        await self.controller.async_request_refresh()
+        hours = self.controller.forecast_hours
+        self.assertEqual(len(hours), 48)
+        self.assertGreater(max(h.ghi for h in hours), 300)
+        self.assertEqual(self.controller.core.forecast_state, "fresh")
+        self.forecast_extra = {"cloud_coverage": None, "condition": "rainy"}
+        self.controller.forecast_checked = None
+        await self.controller.async_request_refresh()
+        cloudy = max(h.ghi for h in self.controller.forecast_hours)
+        self.assertLess(cloudy, 0.5 * max(h.ghi for h in hours))
+
+    async def test_forecast_rows_are_labelled_by_their_own_time(self):
+        await self.controller.async_request_refresh()
+        first = self.controller.forecast_hours[0]
+        self.assertEqual(first.minute, self.now.replace(minute=0).timestamp() / 60)
+
+    async def test_a_failed_forecast_fetch_keeps_the_previous_one(self):
+        await self.controller.async_request_refresh()
+        hours, cache = self.controller.forecast_hours, list(self.controller.forecast_cache)
         original = self.hass.services.async_call
-        async def change_mode(domain, name, data, **kwargs):
+        async def broken(domain, name, data, **kwargs):
             if domain == "weather":
-                self.set_state("sensor.operating", "HOT WATER")
+                raise HAError("provider down")
             return await original(domain, name, data, **kwargs)
-        self.hass.services.async_call = change_mode
+        self.hass.services.async_call = broken
+        self.now += timedelta(minutes=31)
+        await self.controller.async_request_refresh()
+        self.assertEqual(self.controller.forecast_hours, hours)
+        self.assertEqual(self.controller.forecast_cache, cache)
+        self.assertEqual(self.controller.core.forecast_state, "fresh")
+        self.hass.services.async_call = original
+        self.now += timedelta(minutes=5)
+        checked = self.controller.forecast_checked
+        await self.controller.async_request_refresh()
+        self.assertGreater(self.controller.forecast_checked, checked, "a failed fetch is retried after 5 minutes")
+
+    async def test_a_one_minute_room_dropout_keeps_the_last_value(self):
+        # warm room, floor at 24.9: no run is wanted
+        self.set_state("sensor.room", 24.1, unit_of_measurement="°C")
+        self.set_state("sensor.return_water", 24.9, unit_of_measurement="°C")
+        self.set_state("sensor.supply_water", 24.6, unit_of_measurement="°C")
+        await self.controller.async_mode("automatic")
+        await self.minutes(5)
+        target = self.controller.core.ts_star
+        count = len(self.writes())
+        self.set_state("sensor.room", "unavailable")
+        await self.minutes(1)
+        self.assertEqual(self.controller.core.room_state, "ok")
+        self.assertAlmostEqual(self.controller.core.ts_star, target, delta=0.1)
+        self.assertFalse(self.controller.core.run)
+        self.assertEqual(len(self.writes()), count)
+        self.states["sensor.room"] = State(24.1, self.now - timedelta(hours=5), unit_of_measurement="°C")
+        self.states["sensor.room"].state = "unavailable"
+        self.controller.room_last = (24.1, self.now - timedelta(hours=5))
+        await self.minutes(1)
+        self.assertEqual(self.controller.core.room_state, "stale", "a value lost for hours is not used")
+
+    async def test_an_unmapped_operating_state_waits_and_a_defrost_label_is_a_defrost(self):
+        self.set_state("sensor.operating", "ANTIFREEZE")
         await self.controller.async_mode("automatic")
         self.assertEqual(self.writes(), [])
-        self.assertEqual(self.controller.data["status"], "paused")
+        self.assertEqual(self.controller.data["cycle"], "wait")
+        self.assertIn("not mapped", self.controller.data["reason"])
+        self.assertEqual(self.controller.core.since_def, 0.0)
+        self.set_state("sensor.operating", "Defrosting")
+        await self.minutes(1)
+        self.assertEqual(self.controller.data["cycle"], "wait")
+        self.assertEqual(self.controller.core.note, "defrost")
 
-    async def test_surplus_needs_multiple_samples_and_a_gap_resets_it(self):
+    async def test_daily_forecast_is_rejected(self):
+        original = self.hass.services.async_call
+        async def daily(domain, name, data, **kwargs):
+            if domain == "weather":
+                return {"weather.house": {"forecast": [
+                    {"datetime": (self.now + timedelta(days=i)).isoformat(), "temperature": 0} for i in range(7)]}}
+            return await original(domain, name, data, **kwargs)
+        self.hass.services.async_call = daily
+        await self.controller.async_request_refresh()
+        self.assertEqual(self.controller.forecast_hours, ())
+        self.assertEqual(self.controller.core.forecast_state, "none")
+
+    async def test_solar_surplus_raises_the_target_and_pauses_learning(self):
         for key, entity, value in (("pv_entity", "sensor.pv", 4000), ("import_entity", "sensor.import", 0),
                                    ("export_entity", "sensor.export", 1800)):
             self.controller.config[key] = entity
             self.set_state(entity, value, unit_of_measurement="W")
         self.controller.settings.solar_preheat = True
-        for index in range(4):
-            await self.controller.async_request_refresh()
-            self.assertEqual(self.controller.data["surplus"], index == 3)
-            if index != 3:
-                self.now += timedelta(minutes=5)
-        self.now += timedelta(minutes=20)
-        await self.controller.async_request_refresh()
-        self.assertFalse(self.controller.data["surplus"])
+        await self.controller.async_mode("automatic")
+        for index in range(16):
+            await self.minutes(1, **{"sensor.pv": 4000, "sensor.import": 0, "sensor.export": 1800})
+        self.assertTrue(self.controller.data["surplus"])
+        integ = self.controller.core.integ
+        await self.minutes(5, **{"sensor.pv": 4000, "sensor.import": 0, "sensor.export": 1800})
+        self.assertEqual(self.controller.core.integ, integ)
+        self.assertEqual(self.controller.core.parts["target"], 22.3)
+        self.assertIn("solar surplus", self.controller.data["reason"])
+
+    def test_ac_is_asked_only_while_the_floor_heats_and_the_room_is_clearly_cold(self):
+        c = self.controller
+        c.mode = "automatic"
+        c.core.run, c.core.e = True, 1.2
+        self.assertTrue(c.ac_request()[0])
+        c.core.e = 0.5
+        self.assertFalse(c.ac_request()[0])
+        c.core.run, c.core.e = False, 2.0
+        self.assertFalse(c.ac_request()[0])
+        c.core.run, c.core.e = True, None   # room unknown: never borrow the AC
+        self.assertFalse(c.ac_request()[0])
+        c.mode, c.core.e = "observe", 2.0
+        self.assertFalse(c.ac_request()[0])
+
+    async def test_an_assistance_session_shields_the_floor_and_stops_learning(self):
+        self.controller.ac.session = {"phase": "running", "entity": "climate.living"}
+        self.set_state("sensor.room", 23.0, unit_of_measurement="°C")
+        with patch.object(type(self.controller.ac), "blocks_learning", return_value=True):
+            await self.controller.async_mode("automatic")
+        self.assertEqual(self.controller.core.parts["room"], 0.0)
+        self.assertEqual(self.controller.core.integ, 0.0)
+
+    # ------------------------------------------------------------------ storage
+    async def test_restart_keeps_target_learning_and_automatic(self):
+        await self.controller.async_target(23)
+        await self.controller.async_mode("automatic")
+        await self.minutes(30)
+        integ, writes = self.controller.core.integ, len(self.controller.core.wlog)
+        self.assertGreater(integ, 0)
+        before = len(self.writes())
+        await self.controller.async_stop()   # Home Assistant stops: saved, nothing written
+        self.assertEqual(len(self.writes()), before)
+        other = await self.new_controller()
+        self.assertEqual(other.settings.target, 23)
+        self.assertEqual(other.mode, "automatic")
+        self.assertFalse(other.release_pending)
+        self.assertEqual(other.core.integ, integ)
+        self.assertEqual(len(other.core.wlog), writes)
+        self.assertEqual(other.core.room_since, self.controller.core.room_since)
+
+    async def test_a_new_version_or_changed_options_start_in_observe_and_hand_back(self):
+        for change in ("version", "options"):
+            with self.subTest(change=change):
+                self.hass.storage, self.calls[:] = {}, []
+                self.entry.options = {}
+                self.controller = await self.new_controller()
+                await self.controller.async_mode("automatic")
+                self.assertEqual(self.writes()[-1][2]["value"], 28)   # a kick is on the unit
+                await self.controller.async_save()
+                if change == "version":
+                    self.hass.storage["adaptive_heating.test"]["version"] = "0.5.9"
+                else:
+                    self.entry.options = {"maximum_water": 45.0}
+                other = await self.new_controller()
+                self.assertEqual(other.mode, "observe")
+                self.assertTrue(other.release_pending)
+                self.controller = other
+                await self.minutes(1)
+                self.assertEqual(self.controller.data["status"], "observing")
+                left = self.writes()[-1][2]["value"]
+                self.assertLess(left - (24.3 - 0.8), 4.0, "the kick is replaced by an idle setpoint")
+                await self.minutes(5)
+                self.assertEqual(self.writes()[-1][2]["value"], left)
+
+    async def test_a_manual_hold_does_not_resume_after_a_restart(self):
+        await self.controller.async_mode("automatic")
+        self.set_state("number.water", 35, unit_of_measurement="°C", min=20, max=50, step=1)
+        await self.minutes(1)
+        await self.controller.async_stop()
+        other = await self.new_controller()
+        self.assertEqual(other.mode, "observe")
+
+    async def test_leaving_automatic_hands_back_the_idle_setpoint(self):
+        await self.controller.async_mode("automatic")
+        self.assertEqual(self.writes()[-1][2]["value"], 28)   # kick
+        await self.controller.async_mode("observe")
+        left = self.writes()[-1][2]["value"]
+        self.assertLess(left, 28)
+        self.assertLess(left - (24.3 - 0.8), 4.0, "the unit must not start on the setpoint left behind")
+        self.assertFalse(self.controller.manual_hold)
+        count = len(self.writes())
+        await self.minutes(10)
+        await self.controller.async_mode("off")
+        self.assertEqual(len(self.writes()), count, "Observe and Off write nothing more")
+
+    async def test_unload_hands_back_but_not_under_another_controller(self):
+        await self.controller.async_mode("automatic")
+        self.set_state("sensor.operating", "HEAT")
+        await self.minutes(5, **{"sensor.return_water": 27.0, "sensor.supply_water": 31.0})
+        riding = self.writes()[-1][2]["value"]
+        self.assertTrue(await self.controller.async_prepare_unload())
+        left = self.writes()[-1][2]["value"]
+        self.assertLess(left, riding)
+        self.assertEqual(self.hass.storage["adaptive_heating.test"]["resume"], "automatic")
+        self.controller = await self.new_controller()
+        await self.controller.async_mode("automatic")
+        self.controller.config["inhibit_entity"] = "input_boolean.old_controller"
+        self.set_state("input_boolean.old_controller", "on")
+        count = len(self.writes())
+        await self.controller.async_mode("observe")
+        self.assertEqual(len(self.writes()), count)
+
+    async def test_an_update_restart_hands_back_at_stop(self):
+        await self.controller.async_mode("automatic")
+        count = len(self.writes())
+        self.releases.restart_pending = True
+        await self.controller.async_stop()
+        self.assertEqual(len(self.writes()), count + 1)
+        self.assertLess(self.writes()[-1][2]["value"], 28)
+
+    async def test_another_room_sensor_starts_learning_again(self):
+        self.controller.core.integ = 2.0
+        await self.controller.async_save()
+        self.entry.options = {"indoor_entity": "sensor.another_room"}
+        other = await self.new_controller()
+        self.assertEqual(other.core.integ, 0.0)
+
+    async def test_a_0_5_store_is_migrated(self):
+        self.hass.storage = {
+            "adaptive_heating.test": {"identity": "old", "model_revision": 3, "model": {"loss": 0.02},
+                                      "target": 22.4, "configured_target": 22.0, "cooldown": {}, "estimate2": {"slab": 23}},
+            "adaptive_heating.test.learning": {"identity": "old", "house": {}, "log": {"rows": []}},
+        }
+        controller = await self.new_controller()
+        self.assertEqual(controller.settings.target, 22.4)
+        self.assertNotIn("adaptive_heating.test.learning", self.hass.storage)
+        stored = self.hass.storage["adaptive_heating.test"]
+        self.assertEqual(stored["schema"], 2)
+        self.assertEqual(stored["target"], 22.4)
+        self.assertEqual(stored["controller"]["integ"], 0.0)
+        self.assertNotIn("model", stored)
+
+    async def test_a_target_from_another_configured_default_is_not_restored(self):
+        self.hass.storage = {"adaptive_heating.test": {"target": 24.0, "configured_target": 21.0}}
+        controller = await self.new_controller()
+        self.assertEqual(controller.settings.target, 22.0)
+
+    def test_upgrade_stored_handles_any_shape(self):
+        self.assertEqual(adapter.upgrade_stored(None, 22.0), (None, None))
+        self.assertEqual(adapter.upgrade_stored({"schema": 2, "target": 50, "configured_target": 22.0,
+                                                 "controller": {"integ": 1}}, 22.0), (None, {"integ": 1}))
+        self.assertEqual(adapter.upgrade_stored({"target": 21.5, "configured_target": 22.0, "controller": {"x": 1}}, 22.0),
+                         (21.5, None))
 
 
 if __name__ == "__main__":

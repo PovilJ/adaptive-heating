@@ -12,9 +12,9 @@ card-mod and apexcharts-card. The generator does not install them and has no nat
 
 | Tab | Path | What is there |
 | --- | --- | --- |
-| **Home** | `/dashboard-heating/home` | Outdoor weather chip, room temperature with target ± buttons, heat-pump activity with the control-mode selector, power, COP, water out/in, water target, tank, the night plan, the latest reason and a 24-hour room graph. Read-only apart from room target and mode. |
+| **Home** | `/dashboard-heating/home` | Outdoor weather chip, room temperature with target ± buttons, heat-pump activity with the control-mode selector, power, COP, water out/in, water target, tank, the heating cycle (floor estimate and target), the latest reason and a 24-hour room graph. Read-only apart from room target and mode. |
 | **Trends** | `/dashboard-heating/trends` | Room, outdoor, heating-water, tank, power and COP graphs, energy today/month/total, a 7-day energy bar chart, state timelines and the last 10 decisions. |
-| **Plan** | `/dashboard-heating/plan` | Hourly forecast, cold-night plan with its times and estimates, AC assistance with its mode, and learning progress. |
+| **Floor** | `/dashboard-heating/floor` | Hourly forecast, the heating cycle with its reason, floor estimate and target, start/stop points, the floor target's parts, a 24-hour floor graph, AC assistance with its mode, and what the controller has learned (level, room-sensor state, writes in 24 h, daily pattern, fallback curve). Until 0.6.0 this was the Plan tab (`/plan`). |
 | **Hot water** | `/dashboard-heating/water` | Tank temperature with target ± buttons, tank graph, disinfection status/mode, hold progress, Run (asks to confirm) and Cancel, and cycle history. |
 | **System** | `/dashboard-heating/system` | Efficiency (COP, lift, economizer), equipment states, quiet mode, manual water target, Evaluate now, integration settings and updates. |
 
@@ -27,11 +27,11 @@ card-mod and apexcharts-card. The generator does not install them and has no nat
 | Power | grey under 100 W, green under 1.5 kW, amber under 3 kW, red above |
 | COP | green from 4, light green from 3, orange from 2, red below, grey when not running |
 | Tank | red from 45 °C, orange from 38 °C, blue below |
+| Heating cycle | orange starting or heating the floor, indigo ending a run, blue resting, grey no data |
 | Mode selectors | green Automatic, amber Observe, grey Off |
 
 A missing reading shows **—**, never zero. Tank-disinfection and AC notices
-appear on Home only while active or needing attention. The arrow after the room
-target (↘ → ↗) is the measured room trend. **Water target · next N°** compares
+appear on Home only while active or needing attention. **Water target · next N°** compares
 the live device target with the latest permitted candidate; it is not a
 guaranteed command.
 
@@ -75,5 +75,5 @@ mapped is omitted. Optional keys: `inlet`, `outlet`, `defrost`, `live_power`
 `carnot`, `thermal`, `lift`, `economizer`, `tank`, `tank_target`,
 `water_heater`, `heater1`, `heater2`, `quiet`, `disinfection_status`,
 `disinfection_mode`, `disinfection_run`, `disinfection_cancel`,
-`planner_status`, `ac_status`, `ac_mode`, `ac_climate`, `ac_power`,
-`ac_energy`, `prediction`, `samples`, `error`, `hacs_update`.
+`ac_status`, `ac_mode`, `ac_climate`, `ac_power`, `ac_energy`, `cycle`,
+`slab_estimate`, `slab_target`, `writes`, `hacs_update`.

@@ -9,9 +9,13 @@ The updater expects a stable three-part version such as `0.3.0` in all of:
 Update the minimum HA version in `const.py`, `release.json` and root `hacs.json`
 when needed.
 Changing config-entry or stored-data schemas requires a tested migration; never
-replace users' selections with new defaults.
+replace users' selections with new defaults. Config entries are at version 1.2
+(`__init__.async_migrate_entry`); the main store carries `schema: 2`
+(`coordinator.upgrade_stored`). A controller change should also be run through the
+lab (`lab/controllers/production.py` drives the shipped `slab.py`).
 
-Current source is **experimental 0.4.0** (predictive planner, October 10); this is not a numbered GitHub release. Updating metadata or
+Current source is **experimental 0.6.0** (slab thermostat, November 7; see
+[CONTROLLER.md](CONTROLLER.md)); this is not a numbered GitHub release. Updating metadata or
 building an archive does not publish it or change a live HA installation.
 Publication and deployment are separate actions after review and commissioning.
 
@@ -23,8 +27,8 @@ Publication and deployment are separate actions after review and commissioning.
 3. Commit reviewed source and tag the exact commit, for example `v0.3.0`.
 4. Create a GitHub release for that tag with useful release notes.
 5. Attach both assets from `dist/`:
-   - `adaptive_heating-0.3.1.zip`
-   - `adaptive_heating-0.3.1.zip.sha256`
+   - `adaptive_heating-0.6.0.zip`
+   - `adaptive_heating-0.6.0.zip.sha256`
 
 The recorded first 0.1.0 baseline passed all 59 tests, including platform-import
 and setup-form checks against Home Assistant 2026.7.4; see the
@@ -82,5 +86,7 @@ transition. The built-in updater requires it before replacement. Do not delete
 outstanding recovery journals to force an update; old code may not understand
 new session data, and code restoration alone does not restore equipment settings.
 
-The integration never restarts Home Assistant. After an update, each controller
-starts in Observe; users check status and explicitly re-enable Automatic.
+The integration never restarts Home Assistant. After an update (a new version in the
+store), each controller starts in Observe; users check status and explicitly re-enable
+Automatic. From 0.6.0 main heating resumes Automatic after a restart or reload of the
+same version and options; a release must not weaken that version check.

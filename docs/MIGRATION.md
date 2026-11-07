@@ -17,12 +17,58 @@ The September 24 installation began with 0.1.0 in Observe. Later live reads are
 recorded separately in the history; building the pending correction does not
 update the running installation.
 
+## Upgrading 0.5.x to 0.6.0
+
+0.6.0 replaces the heating logic ([CONTROLLER.md](CONTROLLER.md)). Before updating,
+select Observe for main heating, tank disinfection and AC as for any update. Then:
+
+- **Unit.** 0.6 needs Versati-like firmware (continuous circulation, start on the restart
+  hysteresis, stop 2 °C over the setpoint); other units should stay on 0.5.x or use Observe.
+- **Mappings.** The return- and supply-water sensors are now required, and Automatic
+  needs the heating-mode entity with its enabled value. If the unit exposes its restart
+  hysteresis register, map it (read only; the first house's Versati does); otherwise
+  check that the *Restart hysteresis* option matches the unit (4 K by default). The lab
+  prefers 5 K on the unit (about 0.3 points over the season, more in mild weeks): set it
+  on the unit by hand if you agree; the integration never writes it. Your other selections
+  are kept.
+- **Water limits.** *Minimum water* is now the lowest park and ride setpoint (the lab used
+  25 °C) and *Maximum water* caps every write (rides stay at or under 39 °C; the lab used
+  40 °C). Other values run outside what was ranked; a Minimum water above the unit's
+  restart point never parks there (the restart point wins).
+- **Options.** The config entry migrates from 1.1 to 1.2 on first load: the heating
+  curve, room feedback, floor response, rise/fall limits, control interval, predictive
+  switch and all cold-night options and mappings are removed; nothing else changes.
+  New options (run output, restart hysteresis, loop heat per °C, slab supply share,
+  sensor offsets, AC help threshold) follow their defaults until you save the options.
+  Downgrading to 0.5.x keeps working; 0.5 then uses its defaults for the removed options.
+- **Entities.** *Predicted minimum room temperature*, *Learning samples*, *Model
+  prediction error*, *Cold-night plan* and *Planned room target* are removed. New:
+  *Heating cycle*, *Floor estimate*, *Floor target*, *Setpoint writes in 24 h*.
+  Rebuild the dashboard with `scripts/build_dashboard.py` (its Plan tab is now Floor;
+  the mapping keys `planner_status`, `prediction`, `samples` and `error` are replaced by
+  `cycle`, `slab_estimate`, `slab_target` and `writes`).
+- **Learning.** The room target is kept. The 0.5 house model and its four-week log are
+  dropped; the new controller learns its level within hours and its daily pattern
+  within one to two weeks.
+- **Behaviour you will notice.** Setpoint writes every few minutes during a run (15–20 a
+  day), two long runs a day, runs ended by a low setpoint write, and a parked setpoint
+  a few degrees above the return while resting. Cold-night coasting is gone; the
+  forecast and daily pattern anticipate every day. A lost room sensor keeps heating
+  going and raises a notification. The first days after the update may run a little
+  warm in mild weather until the learned level settles.
+- **Restarts and leaving Automatic.** Changed from 0.5: Automatic now resumes after a
+  plain Home Assistant restart or reload of the same version and options (an update or
+  an options change still starts in Observe). Leaving Automatic writes the controller's
+  idle setpoint once, so the unit is never left riding a run. A command the unit does
+  not show within five minutes is sent once more before Automatic pauses, and every
+  pause raises a notification.
+
 ## Behavior and feature disposition
 
 | Capability | Supplied legacy heating script | Integration 0.3.0 / disposition |
 | --- | --- | --- |
 | Installation and house mappings | Copy/edit PyScript source with literal entity IDs and separately created helpers. | **Replaced:** a reusable component release with UI selectors and per-entry settings. No PyScript dependency for either controller. |
-| Operating modes | Enable helper gates the whole cycle; the shadow branch is not a normal continuous mode. | **Expanded:** Observe calculates/learns without writes when inputs and operating gates permit; Automatic permits writes; Off disables writes and fitting. Startup/reconfiguration returns to Observe. |
+| Operating modes | Enable helper gates the whole cycle; the shadow branch is not a normal continuous mode. | **Expanded:** Observe calculates/learns without writes when inputs and operating gates permit; Automatic permits writes; Off disables writes and fitting. Startup/reconfiguration returns to Observe (from 0.6.0 main heating resumes Automatic after a plain restart or reload of the same version and options). |
 | Target and learning storage | `input_number` helpers for the room target, `k_loss` and `k_gain`. | **Replaced:** integration-owned Room target and stored model. Legacy coefficients are not imported; the model structure and bounds differ. |
 | Learning | Night-only window, short in-memory history and heating-on/off inference from water temperatures. | **Reworked:** valid heating and idle observations with explicit activity events, return/supply measurements during floor charging, retained floor heat and a configurable response time (initially three hours). AC operation/settling exclude fitting. A separate night-policy model still calibrates comparable settled low-water dark intervals. Neither model measures COP or unheated-house loss. |
 | Prediction | Up to 12 hourly steps, integer water candidates, direct loss/gain response. | **Reworked:** up to 12 forecast hours with 15-minute simulation steps; prediction can adjust the curve by at most 2 °C after sample/error gates pass. In 0.3.1, sustained cold forecasts also prepare the baseline before model calibration, using the floor and water-ramp lead. |

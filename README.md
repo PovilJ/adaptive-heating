@@ -1,25 +1,24 @@
 # Adaptive Heating
 
-An experimental Home Assistant custom integration for predictive heat-pump water
-temperature control. It uses existing Home Assistant entities from any compatible
-device integration. Each installation owns its settings and learned response.
+An experimental Home Assistant custom integration for heat-pump water temperature
+control of slab underfloor heating. It uses existing Home Assistant entities, but from
+0.6.0 its controller relies on firmware that behaves like the **Gree Versati**'s (see
+[Requirements](#requirements-and-entities)). Each installation owns its settings and
+learned response.
 
-**0.3.1 is an experimental build.** It improves ordinary
-forecast preparation and gradual floor recovery, alongside opt-in cold-night
-planning and optional AC assistance. All **205
-tests pass** in Python 3.14.7 with Home Assistant 2026.7.4 and simulated device
-services; see the
-[validation record](docs/HISTORY.md#validation-evidence). Installed in the first
-house on October 8 and verified after restart on Home Assistant 2026.9.3:
-Automatic evaluates normally while heating is enabled and the compressor is
-idle. Water changes still obey startup rate limits and the command interval.
-A monitored tank cycle, representative heating/AC operation and measured
-comfort/energy comparisons remain field-validation steps. No numbered GitHub
-release is published by this installation.
-
-
-Since 0.4.0 the water temperature is chosen by a predictive planner that simulates
-the house 36 hours ahead; see [docs/PREDICTIVE.md](docs/PREDICTIVE.md).
+**0.6.0 is an experimental build.** It replaces the 36-hour planner with a thermostat on
+the floor slab, read from the water sensors: it decides when the compressor starts and stops,
+starts it gently, holds it at an efficient mid output, and anticipates forecast cold, forecast
+sun and the house's own daily pattern. In the lab simulator of the first house it uses about
+6–7 % less metered electricity than 0.5.3 and holds the room on target instead of 0.3 °C warm;
+see [docs/CONTROLLER.md](docs/CONTROLLER.md). **These are simulated numbers only.** The
+electricity half depends on the unit's measured part-load efficiency, which the two-hold field
+test should confirm (with flat efficiency the saving is about 1.4 %), and the lab's port of
+0.5.3 may run slightly warmer than the real 0.5.3. Expect less electricity in cold and mixed
+weather, and about the same electricity with a room closer to target in mild weather. Field
+results in the house are pending. Tests and their environment are recorded in the
+[validation record](docs/HISTORY.md#validation-evidence).
+No numbered GitHub release is published; HACS installs the `main` branch.
 
 ## Origins and project status
 
@@ -35,54 +34,53 @@ coasting, with optional AC sessions and separate empirical cooldown learning.
 It does not reproduce the legacy script's strategy rules verbatim.
 Version **0.3.1** separates heating enablement from compressor activity, retains
 floor heat across pauses, and adds forecast/trend preparation and bounded
-assistance for sustained failed recovery.
+assistance for sustained failed recovery. Versions **0.4–0.5** planned the water
+36 hours ahead with a fitted house model. Version **0.6.0** replaces all heating
+logic with the [slab thermostat](docs/CONTROLLER.md) that won the
+[lab comparison](docs/research/CONTROLLER_COMPARISON.md).
 
 - [Timeline, completed work and next milestones](docs/HISTORY.md)
 - [Legacy behavior comparison and migration guide](docs/MIGRATION.md)
 - [Original source, dependencies and preservation checksums](legacy/README.md)
 - [Dashboard layout, reuse and rollback](docs/DASHBOARD.md)
 - [Disinfection setup, scheduling and recovery](docs/DISINFECTION.md)
-- [Cold-night planning, AC assistance and commissioning](docs/COLD_NIGHTS.md)
+- [How the 0.6 heating controller works](docs/CONTROLLER.md)
+- [Offline lab simulator and controller race](lab/README.md)
 
 ## What this build includes
 
-- Optional cold-night preparation using up to 24 hours of hourly weather,
-  measured comfort reserve and cooldown, with bounded preheat, coasting and
-  early floor recovery. Existing water slew limits remain authoritative.
+- A slab thermostat that owns the compressor's runs: floor estimate from the
+  return/supply water, a floor target from the room, the forecast (cold and sun,
+  1–9 hours ahead) and a learned level and daily pattern; gentle starts, mid-output
+  riding, one-write stops and an outage-safe parked setpoint. Evaluated every minute,
+  at most 46 setpoint writes a day. See [docs/CONTROLLER.md](docs/CONTROLLER.md).
+- Fail-safes for link drops, hot water, defrost, a missing forecast and a lost room
+  thermometer (it keeps heating on a learned outdoor curve and notifies you).
+- Learned state kept across restarts per installation; mapping changes restart it.
 - Optional AC assistance with independent modes, external room feedback,
   outdoor-temperature and session limits, manual ownership handling, restart
-  recovery, and measured session kWh when an AC power meter is configured.
+  recovery, and measured session kWh when an AC power meter is configured. It is
+  asked for only while the floor is heating and the room is clearly under target.
 - Optional tank disinfection with independent Observe/Automatic/Off, continuous
   temperature hold, bounded timeout/restoration, and persistent cycle history.
 - UI entity selectors and editable options, with no house-specific IDs in code.
 - Observe (default), Automatic, and Off modes; an integration-owned room target.
-- Weather compensation, room feedback, and a bounded predictive correction from
-  an empirical model with a lagged heat-emitter state.
-- Forecast preparation from day one: two consecutive cold forecast hours can
-  raise the curve ahead of the floor delay and water ramp, without waiting for
-  model calibration. Future warming does not lower this baseline early.
-- A continuous 30–60 minute room trend provides bounded early cooling response.
-  Gradual recovery assistance waits for the configured floor response, increases
-  by 0.5 °C per command interval up to 2 °C, and decays as the room warms.
-- Persistent per-installation model coefficients and target; mapping changes
-  reset the model. Every startup or settings reload returns to Observe.
-- Unit conversion for °C/°F and W/kW, fresh-temperature checks, operating-state,
-  defrost and optional external-controller inhibition, final output limits,
-  hardware-step handling, and manual-change/command-confirmation holds.
+- Unit conversion for °C/°F and W/kW, operating-state, defrost and optional
+  external-controller inhibition, device limits and steps, and
+  manual-change/command-confirmation holds.
 - Optional measured PV surplus awareness. Batteries retain household priority;
   charge percentage or zero grid import alone never authorizes preheating.
-- Proposed, limited, commanded and actual setpoints, prediction diagnostics,
+- Floor estimate and target, proposed, limited, commanded and actual setpoints,
   electrical measurements, and a bounded recent-decision log.
 - A manual **Check for updates** button and a standard **Install update** entity
   for this repository's stable releases. No HACS dependency or automatic update.
 - Optional installation by repository URL through HACS, with no manual archive
   handling or source copying.
 
-This build does **not** calculate COP, infer flow from pump speed, operate battery
-charging settings, or invoke native heat-pump disinfection modes. Measured electrical
-power/energy is exposed for evaluation; the controller does not yet fit an
-electricity-consumption model or optimize prices. The predictive objective uses
-water temperature as an efficiency proxy, not a claim of measured savings.
+This build does **not** infer flow from pump speed, operate battery charging
+settings, write any heat-pump register other than the heating-water setpoint, or
+invoke native heat-pump disinfection modes. Measured electrical power/energy is
+exposed for evaluation; it is not used by the controller.
 
 ## Requirements and entities
 
@@ -98,9 +96,28 @@ Required selectors:
 | Heating-water setpoint | A writable temperature `number` with min/max/step |
 | Operating state | `sensor`, `binary_sensor`, or `select`, plus the exact state meaning space heating |
 
-Optional selectors include outdoor temperature, return/supply temperatures,
-defrost, another controller's enabled flag, electrical W/kWh, measured PV power,
-positive grid import/export power, and battery SoC/charging/discharging power.
+**The heat pump must behave like the Gree Versati.** The 0.6 controller starts, rides
+and stops runs through the leaving-water setpoint and reads the floor from the return
+water, so it needs:
+
+- a circulation pump that keeps running while the compressor rests (the return water is
+  then the floor temperature);
+- a compressor start when setpoint − control sensor reaches the restart hysteresis, a stop
+  when the control sensor is 2 °C over the setpoint, and modulation in between.
+
+On a unit whose pump stops with the compressor, or whose start/stop rules differ, the floor
+estimate and the start, ride, park and stop setpoints are wrong: use Observe only, or stay on
+0.5.x. The house constants (loop flow, sensor offsets, hysteresis) must be measured for each
+house; see [commissioning](docs/CONTROLLER.md#commissioning-another-house).
+
+Return- and supply-water temperature sensors are required: the controller reads
+the floor from them. For **Automatic**, also map the **heating-mode entity** and
+the value that means space heating is enabled: the controller starts and stops the
+compressor itself and must tell "resting with heating on" from "heating off".
+Optional selectors include the unit's restart-hysteresis register (read only),
+outdoor temperature, defrost, another controller's enabled flag, electrical W/kWh,
+measured PV power, positive grid import/export power, and battery
+SoC/charging/discharging power.
 
 All battery selectors must be provided together or omitted together. In this
 version, grid and battery powers must be separate nonnegative entities. If an
@@ -109,39 +126,26 @@ or template sensors to expose charging/discharging separately. The sign meaning
 must be checked for that inverter. Battery and solar inputs are never mandatory
 for normal temperature control.
 
-Return and supply temperatures are needed to learn active floor charging. Valid
-idle cooling observations can continue with the retained floor state even when
-circuit temperatures are unavailable. Without enough suitable observations the
-integration keeps using the heating curve and room feedback. The model starts
-with a configurable three-hour floor response time; identifying that time
-automatically remains future work.
-They are also needed for cooldown calibration, which requires measured water
-near the low-water setting rather than merely a lowered target.
-
-Cold-night planning can optionally use a Sun entity and a protection thermometer
-in another room. AC assistance needs a `climate` entity with Heat/Off support
-and an external room temperature sensor; an AC electrical-power sensor is
-optional. No additional helpers are required. See the
-[setup guide](docs/COLD_NIGHTS.md#configuration-and-initial-use) for defaults and
-how these inputs affect control.
+The forecast's cloud cover becomes forecast sun through the house's location in
+Home Assistant (Settings → System → General); without a location no sun is
+credited. AC assistance needs a `climate` entity with Heat/Off support and an
+external room temperature sensor; an AC electrical-power sensor is optional.
+No additional helpers are required.
 
 The integration controls a water-temperature number, **not a compressor power
-switch**. Off means stop automatic writes; it does not turn off the heat pump.
-Hot-water, defrost, unknown operating states, and OFF without separate heating-mode
-confirmation prevent space-heating writes. A configured
-inhibit input also blocks writes when on or unavailable. Map the existing
-controller's enable flag to this input during migration.
+switch**. It starts and stops runs only through that setpoint and the unit's own
+restart and stop rules. Off means stop automatic writes; it does not turn off the
+heat pump. Hot water, defrost and operating states that no mapping names pause the
+run; an unavailable unit link, a disabled heating mode and a configured inhibit input
+(on or unavailable) prevent writes. Map the existing controller's enable flag to the
+inhibit input during migration.
 
-If the operating-state sensor reports OFF between normal compressor cycles,
-map a separate **Heating-mode entity** and its enabled value. This permits water
-target adjustments in the configured idle state while heating mode is enabled.
-For the first-house Versati, use
-`number.versati_modbus_esp32_versati_2_mode_set`, enabled value `4`, and idle
-activity `OFF`; numeric values `4` and `4.0` match. Keep the existing activity
-sensor for active heating and hot-water detection. Both active and idle intervals
-train the response model while retaining estimated stored floor heat. Unavailable mode/activity, other operating states,
-hot water, defrost and inhibits continue to block commands. Without this optional
-mapping the original active-heating requirement remains in effect.
+Use the unit's activity sensor for active heating and hot-water detection, with
+its idle value (for example `OFF`) as the compressor-idle state; numeric mode
+values such as `4` and `4.0` match. Map the restart-hysteresis register if the
+unit exposes it, so the controller always uses the unit's own value; otherwise
+set the *Restart hysteresis* option to the unit's setting (a larger value than the
+unit's would let the parked setpoint start the compressor).
 
 ## First installation through HACS
 
@@ -186,7 +190,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    python3 scripts/build_release.py
    ```
 
-   This produces `dist/adaptive_heating-0.3.1.zip` and its checksum. GitHub's
+   This produces `dist/adaptive_heating-0.6.0.zip` and its checksum. GitHub's
    **Code → Download ZIP** is the project source and must be extracted and built;
    it is not the installable component archive.
 
@@ -194,7 +198,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    configuration directory. From the project directory, validate the archive:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config --check
+   python3 scripts/install.py dist/adaptive_heating-0.6.0.zip --config /config --check
    ```
 
    `/config` must be the target house's HA configuration directory as seen from
@@ -206,7 +210,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
 3. Install when ready:
 
    ```sh
-   python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config
+   python3 scripts/install.py dist/adaptive_heating-0.6.0.zip --config /config
    ```
 
    Alternatively extract the archive's `adaptive_heating` folder into
@@ -216,8 +220,7 @@ by URL, use [the HACS steps above](#first-installation-through-hacs).
    Devices & services → Add integration, and select that house's entities.
 5. Keep Observe selected while checking readings, limits, and recommendations.
    Disable the old writer before selecting Automatic. Control resumes only when
-   space heating is positively confirmed. Startup rate limiting begins from the
-   existing water setpoint; it never immediately jumps to the recommendation.
+   space heating is positively confirmed.
 
 On the second house, repeat setup using its own entities. Learned parameters and
 targets are stored through Home Assistant's storage API; they are not in the Git
@@ -253,85 +256,54 @@ failure. A separate minimum-version message means HA must meet the documented
 ## Normal controls
 
 - **Room target:** the desired indoor temperature. Native internal units are °C.
-- **Observe:** calculate and learn without sending water-setpoint commands.
-- **Automatic:** permit bounded commands while all operating checks pass.
+- **Observe:** decide every minute and show what would be written, without
+  writing or learning.
+- **Automatic:** write the heating-water setpoint while all operating checks pass,
+  and learn. A run already in progress is taken over, not stopped. Automatic resumes
+  by itself after a Home Assistant restart or a reload of the same version and options.
 - **Off:** stop commands and learning, while keeping diagnostics available.
-- **Evaluate now:** recompute; it does not bypass command intervals or slew limits.
-- **Configure:** update mappings and tuning; changing them returns to Observe.
+- **Evaluate now:** run the controller once more now.
+- **Configure:** update mappings and options; changing them returns to Observe.
 
-The initial curve is only a starting point, not a commissioned setting for every
-house. Configure water limits appropriate for the equipment and emitters. A
-manual setpoint change, or a command that is not confirmed, creates a hold; inspect
-the cause, then select Observe followed by Automatic to resume. The controller
-does not overwrite an externally selected setpoint outside its configured limits.
+Leaving Automatic (selecting Observe or Off, an options change, a reload, an update)
+writes the controller's idle setpoint once, so the unit keeps the floor near its start
+point by itself and is never left riding a run nobody watches. It is not written while
+another controller's inhibit is on or after you set the value by hand. If Home Assistant
+stops and does not come back, the unit keeps the last setpoint.
 
-The predicted minimum is conditional on the **proposed** water temperature and
-available forecast horizon. Actual commands may differ because of limits. It is
-an estimate, not a guarantee, and remains unavailable until sufficient suitable
-observations have been collected. Model fitting uses valid room/outdoor readings
-and known floor-heating activity across heating and cooling intervals. Hot-water
-and defrost pause floor commands while the floor's residual heat continues to be
-observed. AC operation and settling exclude affected learning; invalid data and
-daylight intervals cannot establish a fit. Learning compares the room with itself
-2–3 hours earlier at night in small capped steps, so it takes nights, not hours.
-The fitted loss remains empirical: internal gains can bias it. Predictions include the water ramp before slow floor response.
+A manual setpoint change creates a hold. A command the unit does not show within five
+minutes is sent once more; a second unconfirmed command, or three failed ones, also
+create a hold. A hold raises a Home Assistant notification; inspect the cause, then
+select Observe followed by Automatic to resume. The **Heating cycle** sensor shows what the controller is doing (`idle`,
+`kick`, `ride`, `stop`, `wait`, `hold`) and its attributes show the floor estimate,
+the floor target and its parts, and what it has learned. The learned level adapts
+within hours; the daily pattern needs one to two weeks. The house constants in the
+options default to the first house; see [docs/CONTROLLER.md](docs/CONTROLLER.md#options)
+before changing them.
 
-The predictive planner (on by default) learns its house as well. It logs every
-half hour for four weeks and refits heat loss and sun gain each night at 03:00,
-keeping a refit only when it forecasts the last two days better. It measures
-the heat pump's minimum output and restart gap from what the unit actually
-does, and uses metered electricity and, when mapped, PV output as measured
-heat and sunshine. A new or remapped house starts from the defaults and
-settles within a few days; the status sensor's `learning` attribute shows what
-it has learned. See [docs/PREDICTIVE.md](docs/PREDICTIVE.md).
-
-Ordinary forecast preparation also works while the model learns. A sustained cold
-drop within the floor-response and water-ramp lead raises the weather curve;
-a single cold forecast point cannot do so. Room cooling is estimated from at
-least 30 minutes of continuous measurements and can add at most 2 °C to the water
-recommendation before the room drops below target. If a below-target room still
-fails to recover after the configured floor response, assistance starts at
-0.5 °C and increases by 0.5 °C per command interval, capped at 2 °C. It decays at
-1 °C/hour when the room improves and clears at target, on an observation gap,
-or when AC/operating conditions exclude it. A cold, falling room cannot authorize
-an ordinary water reduction; deliberate night coasting and ceiling reductions
-retain their separate comfort policy. Every final command still obeys water
-limits, device steps and rise/fall rates. The floor response remains a configured
-estimate, initially three hours; it is not automatically identified.
-
-## Cold-night preparation and AC
-
-Cold-night planning defaults to disabled. Once configured, it can prepare the
-floor earlier, request a capped room-temperature reserve, and lower the water
-recommendation overnight while the measured reserve permits waiting. It allows
-for floor response and the time needed to raise water within the existing slew
-limits before recovery. Default 4 °C/hour increases and 2 °C/hour decreases can
-substantially limit how quickly heating demand shifts; the planner never bypasses
-those limits to meet a schedule.
-
-Cooldown learning describes empirical low-water operation, including possible
-residual floor heat. It is not a thermal-capacity or COP measurement. Expected
-sunshine may influence recovery timing, but contributes no invented warmth to the
-projection. Measured faster cooling, inadequate forecasts, or the optional
-protection room can prevent coasting. A sunny forecast is not a promise that the
-house can remain comfortable without more heat.
+## AC assistance
 
 AC assistance starts in Observe and requires both its own mode and main control
-to be Automatic before it can start an owned session. It only borrows an Off unit,
-returns it to Off after assistance, and respects external changes. Manual or
-automatic AC influence pauses affected model fitting, including a settling period.
-With no AC power meter, only the runtime cap applies; electricity and savings are
-not inferred. See [COLD_NIGHTS.md](docs/COLD_NIGHTS.md) before enabling either feature.
+to be Automatic before it can start an owned session. It is asked for only while
+the floor is already heating and the room is at least *AC help below target*
+(1 °C by default) under its target; the floor never relies on it. It only borrows
+an Off unit, returns it to Off after assistance, and respects external changes. An
+unavailable AC counts as off. While a session runs, its warmth cannot lower the
+floor target, and manual or automatic AC operation pauses learning, including a
+settling period. With no AC power meter, only the runtime cap applies; electricity
+and savings are not inferred.
 
 ## Solar and battery policy
 
-Solar preheating defaults to disabled. Enabling it allows only a small increase
-within the chosen comfort band. A minimum of fifteen minutes of sampled surplus
+Solar preheating defaults to disabled. Enabling it raises the room target by the
+preheat degrees (within the chosen comfort band) while a measured surplus lasts,
+and pauses learning meanwhile. A minimum of fifteen minutes of sampled surplus
 is needed. Missing/invalid measurements or a sampling gap reset qualification.
 
 - Sunny weather or a full battery alone is insufficient.
 - Snow-covered panels producing zero power never qualify as electrical surplus.
-- A sunny room can still warm naturally; room feedback works independently of PV.
+- A sunny room can still warm naturally; the forecast sun and room terms work
+  independently of PV.
 - Battery discharge, material battery charging, insufficient SoC, or grid import
   prevents extra preheating. The inverter continues to determine actual dispatch.
 - Optional preheating should be enabled only when its use fits the household's
@@ -379,7 +351,7 @@ Core tests require only Python's standard library:
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/build_release.py
-python3 scripts/install.py dist/adaptive_heating-0.3.1.zip --config /config --check
+python3 scripts/install.py dist/adaptive_heating-0.6.0.zip --config /config --check
 ```
 
 For the real-HA import/schema and isolated lifecycle checks, create a separate Python 3.14
@@ -387,6 +359,13 @@ virtual environment and install `requirements-dev.txt`, then run the same test
 command with that environment's Python. Those tests are explicitly skipped when
 HA is absent. The adapter tests use in-memory fake services and never contact
 equipment. Exercise an isolated HA installation before deploying live.
+
+The lab simulator drives the production controller file through
+`lab/controllers/production.py`:
+
+```sh
+.local/lab-venv/bin/python lab/run.py --rank -c reference_tuned,hybrid,production -s season --seeds 5-9
+```
 
 See [design and acceptance criteria](docs/DESIGN.md), [releasing](docs/RELEASING.md),
 and [repository access](docs/GITHUB_ACCESS.md). No open-source license has yet been

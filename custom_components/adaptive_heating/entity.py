@@ -17,6 +17,6 @@ class HeatingEntity(CoordinatorEntity):
             identifiers={(DOMAIN, coordinator.entry.entry_id)},
             name=coordinator.entry.title,
             manufacturer="Adaptive Heating",
-            model="Predictive water-temperature controller",
+            model="Floor-slab heating controller",
             sw_version=VERSION,
         )

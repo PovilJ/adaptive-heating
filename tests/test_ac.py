@@ -33,7 +33,7 @@ ac = load_ac()
 
 class ACSettingsTest(unittest.TestCase):
     def test_invalid_settings(self):
-        for values in ({"ac_min_outdoor": -99}, {"ac_preheat_max": 30}, {"ac_max_session_kwh": 0},
+        for values in ({"ac_min_outdoor": -99}, {"ac_preheat_max": 30}, {"ac_max_session_kwh": 0}, {"ac_assist_below": 0.1},
                        {"ac_min_on_minutes": 1}, {"ac_min_off_minutes": 0}, {"ac_sample_seconds": float("nan")},
                        {"ac_min_on_minutes": 130}):
             with self.assertRaises(ValueError):
@@ -49,7 +49,7 @@ class ACBoundary(unittest.IsolatedAsyncioTestCase):
         self.hass = types.SimpleNamespace(states=types.SimpleNamespace(get=self.states.get), storage={},
             config=types.SimpleNamespace(units=types.SimpleNamespace(temperature_unit="°C")),
             services=types.SimpleNamespace(async_call=self.service), data={})
-        self.config = ac.DEFAULTS | {"ac_entity": "climate.living", "ac_room_entity": "sensor.room", "preheat_ceiling": 23}
+        self.config = ac.DEFAULTS | {"ac_entity": "climate.living", "ac_room_entity": "sensor.room"}
         self.blocked, self.outdoor = "", -5
         self.owner = types.SimpleNamespace(hass=self.hass, config=self.config, entry=types.SimpleNamespace(entry_id="test"),
             mode="automatic", manual_hold=False, shutting_down=False, releases=types.SimpleNamespace(restart_pending=False),
@@ -86,11 +86,11 @@ class ACBoundary(unittest.IsolatedAsyncioTestCase):
 
     async def start(self, target=23):
         await self.controller.async_mode("automatic")
-        await self.controller.async_tick(True, target, "Cold-night preparation")
+        await self.controller.async_tick(True, target, "Room under target while the floor heats")
 
     async def acknowledge(self):
         self.advance(seconds=10)
-        await self.controller.async_tick(True, 23, "Cold-night preparation")
+        await self.controller.async_tick(True, 23, "Room under target while the floor heats")
 
     async def test_observe_never_actuates_and_restart_defaults_observe(self):
         await self.controller.async_tick(True, 23, "Cold tonight")

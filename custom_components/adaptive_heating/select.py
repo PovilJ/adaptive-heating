@@ -1,4 +1,5 @@
-"""Observe is the initial mode; Automatic must be selected explicitly."""
+"""Observe is the initial mode; Automatic must be selected explicitly. Main heating Automatic
+resumes after a plain restart or reload of the same version and options (coordinator.async_load)."""
 
 from homeassistant.components.select import SelectEntity
 

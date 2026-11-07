@@ -12,12 +12,10 @@ from .const import DEFAULTS, DOMAIN, OPTIONAL_ENTITIES, REQUIRED_ENTITIES
 from .disinfection import DEFAULTS as DHW_DEFAULTS, ENTITIES as DHW_ENTITIES, DisinfectionSettings
 from .disinfection_controller import native_target
 from .engine import Settings
-from .planner import DEFAULTS as PLAN_DEFAULTS, PlannerSettings
 from .ac_controller import DEFAULTS as AC_DEFAULTS, ENTITIES as AC_ENTITIES, ACSettings
 
-PLAN_ENTITIES = {"sun_entity": ["sun"], "protection_entity": ["sensor"]}
-ALL_OPTIONAL = OPTIONAL_ENTITIES | DHW_ENTITIES | PLAN_ENTITIES | AC_ENTITIES
-ALL_DEFAULTS = DEFAULTS | DHW_DEFAULTS | PLAN_DEFAULTS | AC_DEFAULTS
+ALL_OPTIONAL = OPTIONAL_ENTITIES | DHW_ENTITIES | AC_ENTITIES
+ALL_DEFAULTS = DEFAULTS | DHW_DEFAULTS | AC_DEFAULTS
 
 
 def settings_schema(values):
@@ -43,12 +41,6 @@ def settings_schema(values):
 def validate(hass, values, current_entry_id=None):
     errors = {}
     merged = ALL_DEFAULTS | values
-    try:
-        plan = PlannerSettings(**{key: merged[key] for key in PlannerSettings.__dataclass_fields__})
-        if plan.cold_night_enabled and not plan.night_minimum <= merged["target"] <= plan.preheat_ceiling:
-            raise ValueError("Target outside planned comfort range")
-    except (ValueError, TypeError):
-        errors["base"] = "invalid_planning_limits"
     try:
         ACSettings(**{key: merged[key] for key in ACSettings.__dataclass_fields__})
     except (ValueError, TypeError):
@@ -108,7 +100,7 @@ def validate(hass, values, current_entry_id=None):
         modes = ac.attributes.get("hvac_modes")
         if not isinstance(modes, (list, tuple)) or not all(mode in modes for mode in ("heat", "off")):
             errors["ac_entity"] = "ac_heat_required"
-    for key in ("ac_room_entity", "protection_entity"):
+    for key in ("ac_room_entity", "inlet_entity", "outlet_entity"):
         state = hass.states.get(values.get(key, ""))
         if state and state.attributes.get("unit_of_measurement") not in ("°C", "°F"):
             errors[key] = "temperature_required"
@@ -136,6 +128,7 @@ def validate(hass, values, current_entry_id=None):
 
 class AdaptiveHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
+    MINOR_VERSION = 2  # 1.2 (0.6.0): retired curve/planner options removed; see __init__.migrate_values
 
     async def async_step_user(self, user_input=None):
         errors = {}

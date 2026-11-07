@@ -11,3 +11,9 @@ dist/
 *.pem
 .storage/
 secrets.yaml
+# Owner-only lab data scripts: they name the first house's Home Assistant entities and import a
+# private helper (base URL + token). docs/research/lab/data.md describes them.
+lab/data/ha_discover.py
+lab/data/ha_pull.py
+lab/data/build_datasets.py
+lab/data/describe.py

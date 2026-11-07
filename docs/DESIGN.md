@@ -23,20 +23,23 @@ For the rewrite's origin and progress, see [project history](HISTORY.md), the
 
 ## Architecture
 
-`engine.py` contains deterministic unit conversion, validation, bounded learning,
-thermal-response simulation, the curve/prediction decision and final output
-constraints. It has no Home Assistant or network dependency.
+Since 0.6.0 the heating decision is `slab.py`, the slab thermostat described in
+[CONTROLLER.md](CONTROLLER.md): standard library only, no Home Assistant or network
+dependency, also driven by the lab simulator. `engine.py` keeps unit conversion,
+option validation and the solar-surplus rule. Sections below about the 0.1–0.5 model,
+planner and cold-night policy are the record of those versions.
 
 `coordinator.py` owns entity reads, forecast caching, observations and the shared
 lock used by heating, tank and AC writers. Every command passes fresh operating
 and ownership checks after external awaits. Modes
 and in-flight commands are serialized. The final command is both recorded and
-checked against the device's later state. A manual edit or failed confirmation
-holds control until explicitly resumed.
+checked against the device's later state; the controller counts a write only once the
+device accepted it. A manual edit, a second unconfirmed command or three failed ones
+hold control until explicitly resumed, with a notification. Leaving Automatic writes
+the controller's idle setpoint once (`slab.release`), and Automatic resumes after a
+plain restart or reload of the same version and options.
 
-`planner.py` contains the independent cold-night settings, hourly forecast
-validation, empirical low-water cooldown model and phase policy. It has no Home
-Assistant dependency. `ac_controller.py` owns the optional climate session state
+`ac_controller.py` owns the optional climate session state
 machine, separate recovery journal, confirmation/manual-override behavior, and
 sampled electrical budget. `disinfection.py` and `disinfection_controller.py`
 retain the separate tank policy and its restoration lifecycle.
