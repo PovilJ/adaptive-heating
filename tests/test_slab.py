@@ -51,6 +51,13 @@ class StartRideStop(unittest.TestCase):
                 written.append(d.setpoint)
         self.assertEqual(written, [29.0, 30.0, 31.0])
 
+    def test_kick_setpoint_does_not_chase_warming_loop_water(self):
+        c = slab.SlabController()
+        d = c.step(idle(0, inlet=27.2, outlet=28.0))
+        self.assertEqual(d.setpoint, 32.0)  # ceil(27.2 - 0.8 + 5 + 0.15), the test unit has a 5 K restart delta
+        for m in range(1, 5):  # the unit sits out its restart pause while the loop warms
+            self.assertIsNone(c.step(idle(m, inlet=27.2 + 0.15 * m, outlet=28.0, setpoint=32.0)).setpoint)
+
     def test_ride_holds_mid_output_inside_the_dead_band(self):
         c = slab.SlabController()
         c.step(idle(0))
@@ -76,8 +83,29 @@ class StartRideStop(unittest.TestCase):
         stops = [c.step(running(m, **warm)) for m in range(59, 63)]
         stop = next(d for d in stops if d.setpoint is not None)
         self.assertEqual(stop.phase, "stop")
-        self.assertEqual(stop.setpoint, 25.0)  # min(Minimum water, control sensor - 2.1): the unit stops at once
+        # the stop writes the idle park itself, at least 2.1 K under the control sensor: the unit
+        # stops at once and the next idle minute has nothing to rewrite
+        self.assertLessEqual(stop.setpoint, 36.0 + 0.3 - 0.8 - 2.1)
         self.assertFalse(c.run)
+        after = c.step(idle(63, setpoint=stop.setpoint, inlet=33.0, outlet=33.2, room=22.5))
+        self.assertEqual(after.phase, "idle")
+        self.assertEqual(after.want, stop.setpoint)
+        self.assertIsNone(after.setpoint)
+
+    def test_ride_lifts_the_setpoint_before_the_firmware_stops_the_run(self):
+        c = slab.SlabController()
+        c.step(idle(0))
+        sp = 29.0
+        for m in range(1, 30):
+            d = c.step(running(m, setpoint=sp, inlet=27.0, outlet=30.0))
+            sp = d.setpoint or sp
+        sp = 29.0
+        c.last_write, c.last_sp = 29.0, 29.0  # a write of 29 a minute ago: ride spacing and hysteresis would hold
+        # control = outlet + 0.3 - 0.8; the firmware stops at control >= setpoint + 2 K
+        self.assertIsNone(c.step(running(30, setpoint=sp, inlet=27.1, outlet=30.9)).setpoint)  # control 30.4
+        d = c.step(running(31, setpoint=sp, inlet=27.1, outlet=31.2))                          # control 30.7
+        self.assertEqual(d.phase, "ride")
+        self.assertGreaterEqual(d.setpoint, 30.0)
 
     def test_rest_time_before_the_next_start(self):
         c = slab.SlabController()

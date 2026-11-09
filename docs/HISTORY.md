@@ -1,6 +1,6 @@
 # Project history and status
 
-Last reviewed: **2026-11-07**. Current source version: **0.6.0, experimental**: the
+Last reviewed: **2026-11-09**. Current source version: **0.6.1, experimental**: the
 slab thermostat ([CONTROLLER.md](CONTROLLER.md)) replaces the 0.4–0.5 predictive
 planner. The first house last ran 0.5.3 (installed by the owner through HACS). The
 sections below keep the record of each earlier stage as it was written.
@@ -533,3 +533,27 @@ restart-hysteresis register, and consider 5 K on the unit.
 the 1.1 → 1.2 entry migration, registry cleanup, the 0.5 store migration and a resumed reload.
 Not yet installed in the house.
 
+
+### November 9 first field days of the slab thermostat — 0.6.1
+
+0.6.0 ran in Automatic from 2026-11-07 21:02. Room 21.4–22.6 °C, outlet 29–31 °C, about
+11 setpoint writes a day, but runs were 1–4 h instead of the expected ~5 h, and some
+changes came in bursts right after a previous one:
+
+- every stop wrote 25 °C and then the idle park (27–28 °C) a minute later; the stop now
+  writes the park itself, still ≥ 2.1 K under the control sensor, so the unit stops at once;
+- at 05:03 on 9 Nov the firmware ended a run (control ≥ setpoint + 2 K) because a 1 K
+  ride lift was held back by the 1.3 K hysteresis; the re-kick wrote 31, 32, 30 in six
+  minutes and cost a compressor start. The ride now lifts the setpoint to
+  ceil(control − 1.5) at once, by the smallest step that keeps the run;
+- the kick setpoint followed the warming loop water (31 → 32 in 3 min while the unit sat out
+  its restart pause); it is now fixed when the kick begins, with only the 6-minute steps;
+- the first minute after the 16:38 restart on 8 Nov had no unit values; the handover read
+  the running compressor as idle and stopped a 6-hour run. The handover now waits for the
+  unit's values.
+
+Lab (simulated, nominal): recorded season 2.6 → 2.2 starts/day and 12.3 → 11.8 writes/day
+(recorded_c2), energy −0.4 %; across the seven weeks writes fall in five, energy −0.3 %,
+comfort unchanged; dec_damp gains about one start every three days. 171 tests pass.
+Not seen in the lab: a hot-water pause still looks like a stopped run (two pointless kick
+writes on 8 Nov 10:09).

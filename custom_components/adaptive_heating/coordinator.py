@@ -484,13 +484,15 @@ class HeatingCoordinator(DataUpdateCoordinator):
         in_charge = (self.mode == "automatic" and not self.releases.restart_pending and not self.manual_hold
                      and not snapshot["control"] and not self.shutting_down)
         act = in_charge and not snapshot["hold"]
-        if in_charge and not self.in_charge:
+        if in_charge and not self.in_charge and snapshot["link_ok"]:
             # Handover (Automatic selected or resumed after a restart, a manual hold or inhibit
             # cleared): take the unit as it is. A link drop or tank cycle is not a handover; the
             # controller rides those out.
             self.core.adopt(bool(snapshot["compressor_on"]) and snapshot["mode"] == "heat")
             self.release_pending = False
-        self.in_charge = in_charge
+        # A handover waits for the unit's values: adopting on an unavailable minute (the first
+        # step after a restart) read a running compressor as idle and stopped the run.
+        self.in_charge = in_charge and (self.in_charge or bool(snapshot["link_ok"]))
         ac_influence = self.ac.blocks_learning(now)
         target = self.settings.target
         room, _ = self.room_input(now)

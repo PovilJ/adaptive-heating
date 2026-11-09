@@ -237,6 +237,7 @@ class SlabController:
         self.comp_min = 0.0
         self.comp_prev = 0.0
         self.kick_min = 0.0
+        self.kick_base = None
         self.q_f = None
         self.last_write = -999.0
         self.last_sp = None
@@ -467,9 +468,21 @@ class SlabController:
     def _stop(self, x: Inputs):
         self.stop_minute = x.minute
         sp = self.p.sp_floor
+        if not self.p.lab_hybrid and self.ts_star is not None:
+            # One write: the park value itself stops the unit when it is 2 K under the control
+            # sensor, so no second write a minute later to raise the stop setpoint to the park.
+            sp = self._park_sp(x, self.ts_star)
         if x.compressor_on:
             sp = min(sp, math.floor(x.outlet + self.p.outlet_offset + self.p.ctrl_offset - 2.1))
         return self._write(x, sp)
+
+    def _park_sp(self, x: Inputs, ts_star: float) -> float:
+        p = self.p
+        cap = math.floor(x.inlet + p.ctrl_offset + x.restart_delta - 0.6)
+        want = math.floor(ts_star - p.band - 0.3 + x.restart_delta + p.ctrl_offset)
+        if p.lab_hybrid:
+            return max(min(cap, want), p.sp_floor)
+        return max(min(max(want, p.sp_floor), cap), p.write_min)
 
     def _park(self, x: Inputs, ts_star: float):
         """Idle setpoint: just under the unit's own restart point for the slab start threshold
@@ -477,11 +490,7 @@ class SlabController:
         except that the restart point wins over a high Minimum water (production rule)."""
         p = self.p
         cap = math.floor(x.inlet + p.ctrl_offset + x.restart_delta - 0.6)
-        want = math.floor(ts_star - p.band - 0.3 + x.restart_delta + p.ctrl_offset)
-        if p.lab_hybrid:
-            park = max(min(cap, want), p.sp_floor)
-        else:
-            park = max(min(max(want, p.sp_floor), cap), p.write_min)
+        park = self._park_sp(x, ts_star)
         self.want = float(park)
         if park == x.setpoint:
             return None
@@ -683,7 +692,15 @@ class SlabController:
             prev = self.kick_min
             self.kick_min += self.dt
             self.q_f = None
-            sp = math.ceil(x.inlet + p.ctrl_offset + x.restart_delta + 0.15) + min(int(self.kick_min // 6), 2)
+            base = math.ceil(x.inlet + p.ctrl_offset + x.restart_delta + 0.15)
+            if not p.lab_hybrid:
+                # The start point is fixed when the kick begins; only the 6-minute steps raise it.
+                # Field 2026-11-09: warm loop water after a stop moved it 31 -> 32 in 3 minutes
+                # while the unit only sat out its restart pause, then the ride wrote 30.
+                if prev == 0 or self.kick_base is None:
+                    self.kick_base = base
+                base = self.kick_base
+            sp = base + min(int(self.kick_min // 6), 2)
             self.want = float(sp)
             if x.setpoint >= sp - 0.5 and int(self.kick_min // 6) == int(prev // 6):
                 self.note = "kick_wait"
@@ -708,4 +725,11 @@ class SlabController:
         if x.minute - self.last_write >= p.ride_every or first:
             if abs(sp - x.setpoint) >= p.ride_hyst and round(sp) != x.setpoint:
                 return self._write(x, sp, critical=first)
+        # The firmware ends the run itself at control >= setpoint + 2 K. Past the ride spacing and
+        # hysteresis, lift the setpoint just enough to keep the run (no more: a bigger lift raises
+        # the output and shortens the run). Field 2026-11-09: a 1 K raise held back by the 1.3 K
+        # hysteresis let the unit stop, and the re-kick cost three writes and a compressor start.
+        lift = math.ceil(t_ctrl - 1.5)
+        if not p.lab_hybrid and lift > x.setpoint:
+            return self._write(x, min(lift, p.sp_ceil))
         return None

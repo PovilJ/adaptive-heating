@@ -306,6 +306,10 @@ write_max=45]` reproduces `hybrid[delta=4]` bit for bit (all 75 season metrics i
 | a small park lowering waits two hours | recorded data showed park pairs (26 then 25) minutes apart at whole-degree edges |
 | no adoption within 5 min of the controller's own stop, nor with the floor over its stop point | the unit can report HEAT for a few minutes after a stop write; re-adopting forced another hour |
 | an adopted run (handover, restart) has no minimum | a run left by the firmware is ended at once when the floor does not need it |
+| a stop writes the idle park itself (still ≥ 2.1 K under the control sensor) | field 2026-11-08: every stop was 25 °C, then a park write (27–28 °C) a minute later |
+| during a ride, the setpoint is lifted to ceil(control − 1.5) at once, past the ride spacing and hysteresis | field 2026-11-09: a 1 K lift held back by the 1.3 K hysteresis let the firmware end the run (control ≥ setpoint + 2 K); the re-kick cost three writes and a start |
+| a handover (Automatic, restart) waits for the unit's values (coordinator) | field 2026-11-08: the first minute after a restart had no unit values, read the running compressor as idle and stopped a run |
+| the kick setpoint is fixed when the kick begins (only the 6-minute steps raise it) | field 2026-11-09: warming loop water after a stop moved it 31 → 32 in 3 min while the unit sat out its restart pause; the first ride write then dropped it to 30 |
 | room input at most 0.05 °C/min; daily pattern takes at most 1.5 °C of error | sensor spikes (one sensor read 27.5 °C for an hour) |
 | a room report briefly `unavailable` keeps the last value (coordinator) | one missing minute moved the floor target by 3 × the room error and could start a run in a warm room |
 | forecast rows labelled by their own time (coordinator) | Home Assistant rows carry the temperature at the hour's start |

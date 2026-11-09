@@ -193,9 +193,26 @@ class ControllerBoundary(unittest.IsolatedAsyncioTestCase):
         # the floor warms far past its target; after the hour minimum the run ends with one write
         await self.minutes(70, **{"sensor.room": 22.6, "sensor.return_water": 34.0, "sensor.supply_water": 37.0})
         stop = self.writes()[-1][2]["value"]
-        self.assertEqual(stop, 25)
+        self.assertLessEqual(stop, 37.0 + 0.3 - 0.8 - 2.1)  # the park value, low enough to stop at once
         self.assertFalse(self.controller.core.run)
         self.assertLess(len(self.writes()) - rides, 6)
+        stopped = len(self.writes())
+        self.set_state("sensor.operating", "OFF")
+        await self.minutes(3, **{"sensor.return_water": 33.5, "sensor.supply_water": 33.7})
+        self.assertEqual(len(self.writes()), stopped, "no second write to raise the stop to the park")
+
+    async def test_a_restart_with_unavailable_values_rides_the_run_it_finds(self):
+        self.set_state("sensor.operating", "unavailable")
+        self.set_state("sensor.return_water", "unavailable")
+        await self.controller.async_mode("automatic")
+        self.assertFalse(self.controller.in_charge, "no handover on a minute without the unit's values")
+        self.set_state("sensor.operating", "HEAT")
+        self.set_state("number.water", 29, unit_of_measurement="°C", min=20, max=50, step=1)
+        self.set_state("sensor.return_water", 26.0, unit_of_measurement="°C")
+        self.set_state("sensor.supply_water", 29.5, unit_of_measurement="°C")
+        await self.minutes(1)
+        self.assertTrue(self.controller.core.run)
+        self.assertNotEqual(self.controller.core.note, "unowned")
 
     async def test_running_unit_is_adopted_when_automatic_is_selected(self):
         self.set_state("sensor.operating", "HEAT")
