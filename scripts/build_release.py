@@ -22,7 +22,7 @@ def build():
     archive = output / f"adaptive_heating-{version}.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         for file in sorted(SOURCE.rglob("*")):
-            if not file.is_file() or file.suffix not in (".py", ".json", ".md"):
+            if not file.is_file() or file.suffix not in (".py", ".json", ".md", ".js"):
                 continue
             if file.is_symlink() or any(part.startswith(".") for part in file.relative_to(SOURCE).parts):
                 raise ValueError("Unexpected hidden file or symlink")

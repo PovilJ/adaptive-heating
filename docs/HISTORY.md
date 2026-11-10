@@ -1,6 +1,6 @@
 # Project history and status
 
-Last reviewed: **2026-11-09**. Current source version: **0.6.1, experimental**: the
+Last reviewed: **2026-11-10**. Current source version: **0.6.2, experimental**: the
 slab thermostat ([CONTROLLER.md](CONTROLLER.md)) replaces the 0.4–0.5 predictive
 planner. The first house last ran 0.5.3 (installed by the owner through HACS). The
 sections below keep the record of each earlier stage as it was written.
@@ -557,3 +557,14 @@ Lab (simulated, nominal): recorded season 2.6 → 2.2 starts/day and 12.3 → 11
 comfort unchanged; dec_damp gains about one start every three days. 171 tests pass.
 Not seen in the lab: a hot-water pause still looks like a stopped run (two pointless kick
 writes on 8 Nov 10:09).
+
+### November 10 dashboard for the slab thermostat — 0.6.2
+
+The live dashboard still showed the 0.5 Plan tab (three planner sensors that 0.6 removed) and
+pointed at the unit's old entity names (the Modbus bridge now names them `*_esp32_ws_*`). The
+apexcharts graphs put the hover readout away from the pointer and under the finger on a phone.
+0.6.2 ships its own chart card (values in a fixed row above the plot, cursor from the plot's
+on-screen box, tap or sideways drag on a phone) and the dashboard now shows the controller
+itself: floor estimate between its start and stop points with the heating runs shaded, on Home
+and on the Floor tab. Checked against 48 h of house data in a desktop and a phone-width page,
+including a card scaled to 0.8. [DASHBOARD.md](DASHBOARD.md#charts).

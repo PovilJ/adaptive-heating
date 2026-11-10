@@ -1,6 +1,7 @@
 """Adaptive Heating: local control using existing Home Assistant entities."""
 
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import callback
@@ -8,7 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, PLATFORMS, RETIRED_OPTIONS, RETIRED_SENSORS
+from .const import DOMAIN, PLATFORMS, RETIRED_OPTIONS, RETIRED_SENSORS, VERSION
 from .coordinator import HeatingCoordinator
 from .engine import temperature
 from .updater import ReleaseManager
@@ -43,8 +44,24 @@ def remove_retired_entities(hass, entry):
             registry.async_remove(entity_id)
 
 
+CHART_URL = "/adaptive_heating/adaptive-heating-chart.js"
+
+
+async def register_chart_card(hass):
+    """Serve the dashboard chart card and load it on every dashboard (once per HA start)."""
+    from homeassistant.components.frontend import add_extra_js_url
+    from homeassistant.components.http import StaticPathConfig
+
+    path = Path(__file__).parent / "frontend" / "adaptive-heating-chart.js"
+    await hass.http.async_register_static_paths([StaticPathConfig(CHART_URL, str(path), False)])
+    add_extra_js_url(hass, f"{CHART_URL}?v={VERSION}")
+
+
 async def async_setup_entry(hass, entry):
     shared = hass.data.setdefault(DOMAIN, {})
+    if "chart" not in shared and getattr(hass, "http", None) is not None and "frontend" in hass.config.components:
+        shared["chart"] = True
+        await register_chart_card(hass)
     if "releases" not in shared:
         shared["releases"] = ReleaseManager(hass)
     remove_retired_entities(hass, entry)

@@ -7,6 +7,7 @@ replace loading the integration in an isolated HA instance before deployment.
 import importlib
 import importlib.util
 import json
+from pathlib import Path
 import tempfile
 import unittest
 
@@ -257,6 +258,34 @@ class HomeAssistantSmoke(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(entry.runtime_data.ac.configured)
         self.assertEqual(entry.options["ac_entity"], "")
         self.assertTrue(await self.hass.config_entries.async_unload(entry.entry_id))
+
+
+@unittest.skipUnless(HAS_HA, "Home Assistant runtime is not installed in this worker")
+class ChartCard(unittest.IsolatedAsyncioTestCase):
+    async def test_the_chart_card_is_served_and_loaded_on_every_dashboard(self):
+        import sys
+        import types
+        from unittest.mock import AsyncMock, MagicMock
+
+        integration = importlib.import_module("custom_components.adaptive_heating")
+        loaded = []
+        frontend = types.ModuleType("homeassistant.components.frontend")
+        frontend.add_extra_js_url = lambda hass, url: loaded.append(url)
+        hass = MagicMock()
+        hass.http.async_register_static_paths = AsyncMock()
+        previous = sys.modules.get("homeassistant.components.frontend")
+        sys.modules["homeassistant.components.frontend"] = frontend  # the real one needs hass_frontend
+        try:
+            await integration.register_chart_card(hass)
+        finally:
+            if previous is None:
+                sys.modules.pop("homeassistant.components.frontend")
+            else:
+                sys.modules["homeassistant.components.frontend"] = previous
+        (config,), = hass.http.async_register_static_paths.call_args.args
+        self.assertEqual(config.url_path, integration.CHART_URL)
+        self.assertTrue(Path(config.path).is_file())
+        self.assertEqual(loaded, [f"{integration.CHART_URL}?v={integration.VERSION}"])
 
 
 if __name__ == "__main__":

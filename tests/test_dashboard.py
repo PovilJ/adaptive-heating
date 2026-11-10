@@ -59,6 +59,17 @@ class DashboardMappings(unittest.TestCase):
                         if "cards" in card or "entities" in card:
                             self.assertTrue(all(card.get("cards", [1])) and card.get("entities", [1]))
 
+    def test_charts_use_the_integration_card_with_the_floor_band(self):
+        charts = [c for c in walk(builder.build(EXAMPLE)) if "chart" in str(c.get("type", ""))]
+        self.assertTrue(charts)
+        self.assertEqual({c["type"] for c in charts}, {"custom:adaptive-heating-chart"})
+        floor = next(c for c in charts if c["title"].startswith("Floor"))
+        offsets = sorted(s.get("offset", 0) for s in floor["series"])
+        self.assertEqual(offsets, [-builder.SLAB_BAND, 0, 0, builder.SLAB_BAND])
+        self.assertEqual(floor["shade"]["states"], ["HEAT"])
+        bars = next(c for c in charts if c.get("bars"))
+        self.assertEqual(bars["series"][0]["entity"], E["energy"])  # a total meter: statistics give one bar per day
+
     def test_home_never_operates_equipment_and_disinfection_asks_first(self):
         home, _, _, water, _ = builder.build(EXAMPLE)["views"]
         self.assertNotIn("perform-action", json.dumps(home))

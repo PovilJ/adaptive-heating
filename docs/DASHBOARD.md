@@ -5,16 +5,34 @@ compact card per reading, value on top, label underneath, and an icon whose
 colour carries the state. Controls sit inside the card they belong to.
 
 It needs these frontend resources that the first house already has:
-[Mushroom](https://github.com/piitaya/lovelace-mushroom), Stack In Card,
-card-mod and apexcharts-card. The generator does not install them and has no native fallback.
+[Mushroom](https://github.com/piitaya/lovelace-mushroom), Stack In Card and
+card-mod. The generator does not install them and has no native fallback.
+
+## Charts
+
+Since 0.6.2 every chart is the integration's own card, `custom:adaptive-heating-chart`
+([source](../custom_components/adaptive_heating/frontend/adaptive-heating-chart.js)).
+The integration serves it and loads it on every dashboard, so there is no extra resource to install.
+It replaced apexcharts-card, whose tooltip drifted away from the pointer and sat under the
+finger on a phone. The card shows every line's value in a fixed row **above** the plot: the live
+value when idle, the value at the cursor while hovering (mouse) or after a tap or sideways drag
+(phone; vertical drags still scroll). The cursor position comes from the plot's on-screen box,
+so it stays under the pointer in scaled or nested cards. Values are the last recorded change
+before the cursor time, the same value Home Assistant had then.
+
+**Floor · 24 h** (Home and Floor) shows what the controller does: the floor estimate, its target,
+the start and stop points (target ∓ 1.4 °C, dashed), and the heating runs shaded. A run starts
+when the floor falls under the start line and ends when it rises over the stop line. Heating-water
+and COP charts shade heating runs too; tank charts shade hot-water runs. Daily energy is one bar
+per local day from the long-term statistics of the total energy meter.
 
 ## Tabs
 
 | Tab | Path | What is there |
 | --- | --- | --- |
-| **Home** | `/dashboard-heating/home` | Outdoor weather chip, room temperature with target ± buttons, heat-pump activity with the control-mode selector, power, COP, water out/in, water target, tank, the heating cycle (floor estimate and target), the latest reason and a 24-hour room graph. Read-only apart from room target and mode. |
+| **Home** | `/dashboard-heating/home` | Outdoor weather chip, room temperature with target ± buttons, heat-pump activity with the control-mode selector, power, COP, water out/in, water target, tank, the heating cycle (floor estimate and target), the latest reason, the Floor · 24 h chart and a 24-hour room chart. Read-only apart from room target and mode. |
 | **Trends** | `/dashboard-heating/trends` | Room, outdoor, heating-water, tank, power and COP graphs, energy today/month/total, a 7-day energy bar chart, state timelines and the last 10 decisions. |
-| **Floor** | `/dashboard-heating/floor` | Hourly forecast, the heating cycle with its reason, floor estimate and target, start/stop points, the floor target's parts, a 24-hour floor graph, AC assistance with its mode, and what the controller has learned (level, room-sensor state, writes in 24 h, daily pattern, fallback curve). Until 0.6.0 this was the Plan tab (`/plan`). |
+| **Floor** | `/dashboard-heating/floor` | Hourly forecast, the heating cycle with its reason, floor estimate and target, start/stop points, the floor target's parts, the Floor · 24 h chart (start/stop band, heating runs shaded), AC assistance with its mode, and what the controller has learned (level, room-sensor state, writes in 24 h, daily pattern, fallback curve). Until 0.6.0 this was the Plan tab (`/plan`). |
 | **Hot water** | `/dashboard-heating/water` | Tank temperature with target ± buttons, tank graph, disinfection status/mode, hold progress, Run (asks to confirm) and Cancel, and cycle history. |
 | **System** | `/dashboard-heating/system` | Efficiency (COP, lift, economizer), equipment states, quiet mode, manual water target, Evaluate now, integration settings and updates. |
 

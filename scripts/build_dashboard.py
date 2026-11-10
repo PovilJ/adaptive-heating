@@ -2,7 +2,7 @@
 """Build the tabbed Lovelace heating dashboard from explicitly mapped entities.
 
 This only writes JSON. It never connects to Home Assistant or changes equipment.
-The destination needs the Mushroom, Stack In Card, card-mod and apexcharts-card resources.
+The destination needs the Mushroom, Stack In Card and card-mod resources; charts use the\nintegration's own card (custom:adaptive-heating-chart), which the integration loads itself.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ ACTIVE_DISINFECTION = ("starting", "heating", "holding", "restoring", "blocked",
                        "recovery_required", "attention_required")
 ACTIVE_AC = ("starting", "running", "stopping", "manual", "blocked",
              "recovery_required", "attention_required")
+SLAB_BAND = 1.4  # K: the controller's start/stop band around the floor target (slab.Params.band)
 RUN_CONFIRMATION = ("Start a tank disinfection cycle now? Disinfection must be in Automatic. "
                     "The current tank target is saved and restored afterwards.")
 
@@ -105,26 +106,24 @@ def build(mapping):
         return {"type": "tile", "entity": e[key], "name": name, "icon": icon, "color": color,
                 "grid_options": {"columns": cols}, **extra}
 
-    def graph(name, series, hours=24, bars=False):
-        """ApexCharts dressed like mini-graph-card: hovering anywhere shows every line's value."""
-        entities = []
-        for index, (key, label, color, *more) in enumerate(item for item in series if e.get(item[0])):
-            shape = ({"type": "column", "group_by": {"func": "max", "duration": "1d"}} if bars else
-                     {"type": "line" if index else "area", "stroke_width": 2, "curve": "smooth",
-                      "group_by": {"func": "avg", "duration": "10min"}})
-            entities.append({"entity": e[key], "name": label, "color": color, "float_precision": 1,
-                             **shape, **(more[0] if more else {})})
+    def graph(name, series, hours=24, bars=False, shade=True):
+        """The integration's own chart card: values sit in a row above the plot (at the cursor,
+        or live), never in a tooltip under the finger. Series: (key, label, colour, options) with
+        options step, dashed, fill, offset, attribute, unit, digits. Bars plot one day per bar
+        from the long-term statistics of a total meter. While the unit heats, the plot is shaded."""
+        entities = [{"entity": e[key], "name": label, "color": color, **(more[0] if more else {})}
+                    for key, label, color, *more in series if e.get(key)]
         if not entities:
             return None
-        fade = {"type": ["solid" if bars or index else "gradient" for index in range(len(entities))],
-                "gradient": {"type": "vertical", "shadeIntensity": 0, "opacityFrom": 0.35,
-                             "opacityTo": 0, "stops": [0, 100]}}
-        return {"type": "custom:apexcharts-card", "graph_span": f"{hours}h", "series": entities,
-                "header": {"show": True, "title": name, "show_states": True, "colorize_states": True},
-                "apex_config": {"chart": {"height": 170}, "legend": {"show": False}, "grid": {"show": False},
-                                "fill": fade, "xaxis": {"axisBorder": {"show": False}, "axisTicks": {"show": False}},
-                                "tooltip": {"shared": True, "intersect": False, "x": {"format": "ddd HH:mm"}}},
-                "grid_options": {"columns": 12}, **({"span": {"end": "day"}} if bars else {})}
+        built = {"type": "custom:adaptive-heating-chart", "title": name, "hours": hours, "series": entities,
+                 "grid_options": {"columns": 12}}
+        if bars:
+            built["bars"] = True
+        elif shade and e.get("operating"):
+            states, label, color = (["HOT WATER", "HOT_WATER", "DHW"], "Hot water", "#e57373") if shade == "dhw" \
+                else (["HEAT"], "Heating", "#ff9800")
+            built["shade"] = {"entity": e["operating"], "states": states, "name": label, "color": color}
+        return built
 
     def markdown(content):
         try:
@@ -241,13 +240,20 @@ def build(mapping):
                "{% set r = states('@reason@') %}{% if is_state('@mode@','off') %}Floor control is off."
                "{% elif r in ['unknown','unavailable',''] %}Waiting for the first evaluation.{% else %}{{ r }}{% endif %}",
                "mdi:head-lightbulb-outline", "amber", 12, entity="reason")
-    room_series = [("indoor", "Room", "#f5a646"), ("target", "Target", "#4db6ac", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}})]
+    # The controller in one picture: the floor estimate between its start and stop points
+    # (floor target -/+ SLAB_BAND), with the heat pump's heating runs shaded.
+    floor_graph = graph("Floor · 24 h", [
+        ("slab_estimate", "Floor", "#ff8a65"),
+        ("slab_target", "Target", "#4db6ac", {"step": True}),
+        ("slab_target", "Start", "#64b5f6", {"step": True, "dashed": True, "offset": -SLAB_BAND}),
+        ("slab_target", "Stop", "#9575cd", {"step": True, "dashed": True, "offset": SLAB_BAND})])
+    room_series = [("indoor", "Room", "#f5a646", {"fill": True}), ("target", "Target", "#4db6ac", {"step": True})]
 
     home = view("Home", "home", "mdi:home-thermometer", [
         section("Heating", "mdi:fire", [chip_row, room, heat_pump, power, cop, supply, returned, water_target, tank_small,
             alert("disinfection_status", "Disinfection", ACTIVE_DISINFECTION, "red", "mdi:water-check", "water"),
             alert("ac_status", "AC assistance", ACTIVE_AC, "indigo", "mdi:air-conditioner", "floor")]),
-        section("Next & why", "mdi:clock-outline", [floor, why, graph("Room · 24 h", room_series)]),
+        section("Next & why", "mdi:clock-outline", [floor, why, floor_graph, graph("Room · 24 h", room_series, shade=False)]),
     ])
 
     # -------------------------------------------------------------- Trends
@@ -266,20 +272,20 @@ def build(mapping):
                           ("ac_status", "AC")) if e.get(key)]}
     trends = view("Trends", "trends", "mdi:chart-line", [
         section("Comfort", "mdi:home-thermometer", [
-            graph("Room · 24 h", room_series),
-            graph("Outdoor · 48 h", [("weather", "Outdoor", "#64b5f6", {"attribute": "temperature", "unit": "°C"})], 48)]),
+            graph("Room · 24 h", room_series, shade=False),
+            graph("Outdoor · 48 h", [("weather", "Outdoor", "#64b5f6", {"attribute": "temperature", "unit": "°C", "fill": True})], 48, shade=False)]),
         section("Water", "mdi:waves", [
-            graph("Heating water · 24 h", [("output", "Target", "#4db6ac", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}}),
+            graph("Heating water · 24 h", [("output", "Target", "#4db6ac", {"step": True}),
                                            ("outlet", "Out", "#ff8a65"), ("inlet", "In", "#64b5f6")]),
             graph("Hot-water tank · 48 h", [("tank", "Tank", "#e57373"),
-                                            ("tank_target", "Target", "#9e9e9e", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}})], 48)]),
+                                            ("tank_target", "Target", "#9e9e9e", {"step": True})], 48, shade="dhw")]),
         section("Electricity", "mdi:lightning-bolt", [
             stat("energy_daily", "Today", "mdi:calendar-today", "amber", 1, " kWh", cols=4),
             stat("energy_monthly", "This month", "mdi:calendar-month", "orange", 0, " kWh", cols=4),
             stat("energy", "Total", "mdi:counter", "brown", 0, " kWh", cols=4),
-            graph("Power · 24 h", [(power_key, "Power", "#ffb300")]) if power_key else None,
-            graph("Daily energy · 7 days", [("energy_daily", "kWh", "#ff8a65")], 168, bars=True),
-            graph("COP · 24 h", [("cop", "COP", "#81c784")])]),
+            graph("Power · 24 h", [(power_key, "Power", "#ffb300", {"fill": True, "digits": 0})], shade=False) if power_key else None,
+            graph("Daily energy · 7 days", [("energy", "Energy", "#ff8a65", {"unit": "kWh"})], 168, bars=True),
+            graph("COP · 24 h", [("cop", "COP", "#81c784", {"digits": 2})])]),
         section("Activity", "mdi:timeline-clock-outline", [states_history, decisions]),
     ])
 
@@ -311,9 +317,7 @@ def build(mapping):
             card("Start below " + val("cycle", 1, "°", "start_below"),
                  "Stop above " + val("cycle", 1, "°", "stop_above"), "mdi:arrow-up-down", "blue", 12, entity="cycle"),
             parts,
-            graph("Floor · 24 h", [("slab_estimate", "Floor", "#ff8a65"),
-                                   ("slab_target", "Target", "#4db6ac", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}}),
-                                   ("indoor", "Room", "#f5a646")])]),
+            floor_graph]),
         section("AC assistance", "mdi:air-conditioner", [
             with_control(card("{{ states('@ac_status@') | replace('_',' ') | capitalize }}",
                               "AC unit {{ state_attr('@ac_status@','actual_mode') or 'unknown' }}",
@@ -343,7 +347,7 @@ def build(mapping):
         section("Hot water", "mdi:water-boiler", [
             with_control(card(val("tank"), "Tank temperature", "mdi:water-boiler", tank_color, 12, entity="tank"), "tank_target"),
             tile("water_heater", "Tank heater", "mdi:heating-coil", "orange", 12),
-            graph("Tank · 48 h", [("tank", "Tank", "#e57373"), ("tank_target", "Target", "#9e9e9e", {"curve": "stepline", "group_by": {"func": "last", "duration": "10min"}})], 48)]),
+            graph("Tank · 48 h", [("tank", "Tank", "#e57373"), ("tank_target", "Target", "#9e9e9e", {"step": True})], 48, shade="dhw")]),
         section("Disinfection", "mdi:water-check", [
             with_control(card("{{ states('@disinfection_status@') | replace('_',' ') | capitalize }}",
                               "{{ state_attr('@disinfection_status@','reason') or 'Tank disinfection' }}",
