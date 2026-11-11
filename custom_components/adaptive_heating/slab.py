@@ -157,12 +157,12 @@ class Decision:
 # ---------------------------------------------------------------------- sun
 # Home Assistant forecasts carry cloud cover, not irradiance. The lab tuned the sun term on
 # Open-Meteo's hourly global horizontal irradiance (GHI); production rebuilds it as a clear-sky
-# GHI (Haurwitz) times a cloud factor, averaged over the hour. The cloud factor
-# 1 - 0.36 c - 0.16 c^20 was fitted on the site's archived hourly irradiance and forecast-model
-# total cloud cover outside the lab's ranking season (Apr-Nov 2026): model "overcast" still
-# passes about half the clear-sky sun. On the held-out season it gives a mean of 163 W/m2
-# against 165 measured (the textbook Kasten-Czeplak law, 1 - 0.75 c^3.4, gives 131) and an
-# hourly error of 61 W/m2 (KC 85). docs/CONTROLLER.md, "Sun".
+# GHI (Haurwitz) times a cloud factor, averaged over the hour. The cloud factor is the
+# Kasten-Czeplak law 1 - 0.75 c^3.4 (0.6.3). The site's PV says why: in the heating season an hour
+# forecast 100 % cloudy typically gives 0.3 of a clear hour (median; the mean, 0.57, is pulled up
+# by the hours the forecast got wrong). 0.6.0-0.6.2 used a
+# fit of the mean irradiance, 1 - 0.36 c - 0.16 c^20, which credited 48 % of clear sky under full
+# overcast and lowered the floor target for sun that did not come. docs/CONTROLLER.md, "Sun".
 
 
 def sun_elevation(when: datetime, latitude: float, longitude: float) -> float:
@@ -189,7 +189,7 @@ def cloud_factor(cloud_percent: float | None) -> float:
     """Share of the clear-sky sun that reaches the ground under a forecast total cloud cover.
     Unknown cloud counts as overcast: no sun is credited that the forecast does not promise."""
     c = 1.0 if cloud_percent is None or not _finite(cloud_percent) else min(max(cloud_percent / 100.0, 0.0), 1.0)
-    return 1.0 - 0.36 * c - 0.16 * c ** 20
+    return 1.0 - 0.75 * c ** 3.4
 
 
 def hour_ghi(end: datetime, latitude: float, longitude: float, cloud_percent: float | None) -> float:

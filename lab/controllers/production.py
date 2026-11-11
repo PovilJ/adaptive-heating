@@ -43,6 +43,18 @@ else:
 PRODUCTION_LIMITS = {"sp_floor": 25.0, "sp_ceil": 39.0, "write_max": 40.0}
 
 
+def _c(cloud):
+    return 1.0 if cloud is None or cloud != cloud else min(max(cloud / 100.0, 0.0), 1.0)
+
+
+CLOUD_LAWS = {
+    "site": lambda cl: slab.cloud_factor(cl),
+    "old": lambda cl: 1.0 - 0.36 * _c(cl) - 0.16 * _c(cl) ** 20,    # 0.6.0-0.6.2 site irradiance fit
+    "lin": lambda cl: 1.0 - _c(cl),
+    "zero": lambda cl: 0.0,
+}
+
+
 def _site():
     path = ROOT / ".local" / "lab-data" / "site.json"
     data = json.loads(path.read_text())
@@ -56,6 +68,9 @@ class Production:
         params = dict(params)
         self.ghi_source = str(params.pop("ghi", "cloud"))
         self.smooth = float(params.pop("smooth", 0)) > 0
+        # diagnostic: cloud -> sun law used to rebuild GHI (`site` = the shipped slab.cloud_factor,
+        # Kasten-Czeplak since 0.6.3; the others were the 0.6.3 comparison, docs/CONTROLLER.md "Sun")
+        self.cloudf = CLOUD_LAWS[str(params.pop("cloudf", "site"))]
         self.place = _site() if self.ghi_source == "cloud" else None
         self.core = slab.SlabController(slab.Params.from_mapping(PRODUCTION_LIMITS | params))
         self.fc_id = None
@@ -72,7 +87,7 @@ class Production:
                 if self.place is None:
                     ghi = h.get("ghi")
                 else:
-                    ghi = slab.hour_ghi(h["time"], *self.place, h.get("cloud"))
+                    ghi = slab.hour_ghi(h["time"], *self.place, 0.0) * self.cloudf(h.get("cloud"))
                 hours.append(slab.Hour(minute, h["outdoor"], ghi))
             self.fc = tuple(hours)
         return self.fc

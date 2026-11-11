@@ -132,22 +132,37 @@ Without them the status explains what to map.
 
 Home Assistant forecasts give cloud cover, not irradiance, and the lab tuned the sun term on
 irradiance. Each forecast hour's sun is the clear-sky irradiance at the house's location
-(Haurwitz) times a cloud factor, `1 − 0.36 c − 0.16 c²⁰` (c = cloud cover 0–1). The factor was
-fitted on the site's archived hourly irradiance and forecast-model cloud cover outside the
-lab's ranking season (April–November 2026). Forecast models call a lot of thin cloud
-"overcast", which still passes about half the clear-sky sun. On the held-out heating season it
-gives a mean of 163 W/m² against 165 measured, with an hourly error of 61 W/m²; the textbook
-Kasten–Czeplak law gives 131 W/m² and 85 W/m². A row without cloud cover uses its condition
-(sunny 0 %, partly cloudy 50 %, otherwise overcast). Without a location in Home Assistant no
-sun is credited. PV output is not used: it only measures the present hour, and the controller's
-sun term looks 1–9 hours ahead.
+(Haurwitz, zero while the sun is below the horizon) times a cloud factor, the Kasten–Czeplak law
+`1 − 0.75 c^3.4` (c = cloud cover 0–1): 1.0 clear, 0.93 at 50 %, 0.67 at 80 %, **0.25 overcast**.
+A row without cloud cover uses its condition (sunny 0 %, partly cloudy 50 %, otherwise
+overcast). Without a location in Home Assistant no sun is credited. PV output is not an input:
+it only measures the present hour, and the controller's sun term looks 1–9 hours ahead.
 
-Limits of the fit: it was made on Open-Meteo's model cloud. Home Assistant's default provider
-(met.no) reported more cloud over 8 Oct – 6 Nov 2026 (mean 90 % against 81 %), and in late
-autumn the estimate reads high against the lab's reference irradiance (145–157 W/m² against
-126 by daylight; in March–April it is about right, 281 against 295). The learned level absorbs
-the mean; the morning and evening shape is not corrected. A fit by sun elevation or on met.no
-cloud would be the next step.
+Why this law (0.6.3). 0.6.0–0.6.2 used `1 − 0.36 c − 0.16 c²⁰`, a fit of the *mean* irradiance
+under each forecast cloud cover, which credits 48 % of clear sky under full overcast. On
+11 Nov 2026 (forecast 100 % cloud and fog all day) that still took 2.3 K off the floor target
+for sun, the target sagged overnight and the morning start came about two hours late (room
+21.2 °C). The site's PV over the heating season (Oct–Mar) shows what an hour forecast 100 %
+cloudy really delivers: a median of **0.29** of a clear hour. The mean, 0.57, is pulled up by
+the hours the forecast got wrong, and the floor should not bank heat on those.
+
+Lab, season, seeds 0–3, against the old law (adjusted energy, % of window electricity):
+
+| law | overcast | nominal | sun +30 % | sun −30 % | pessimistic forecast | overcast Nov mornings (05–10 h) |
+|---|---|---|---|---|---|---|
+| old fit | 0.48 | — | — | — | — | 0.34 K under target |
+| **Kasten–Czeplak** | **0.25** | **−0.04** | **−0.05** | **+0.01** | **+0.01** | **0.29 K** |
+| 1 − c⁴ | 0 | +0.20 | +0.20 (worse) | +0.08 | +0.21 | 0.26 K |
+| 1 − c | 0 | +0.45 (worse) | +0.43 (worse) | +0.37 | +0.38 (worse) | 0.20 K |
+| no sun | 0 | +2.08 (worse) | +2.07 | +1.89 | +1.91 | — |
+
+Kasten–Czeplak is the only one never worse. Laws that give overcast zero help dull mornings a
+little more, but cost on sunny days. That cost rests on the simulator, whose house model lets
+diffuse light through the windows heat the room (`lab/sim/house.py` apertures × facade
+irradiance), so it may be overstated. Over the whole season the sun law moves comfort by
+hundredths of a kelvin: most of the morning dip in the lab (about 0.3 K at 05–10 h in every
+week) is the slab band and the night coast, not the sun. `production[cloudf=old|lin|zero]` in
+the lab reruns the comparison.
 
 ### Why the room is no longer averaged
 

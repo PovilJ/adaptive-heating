@@ -396,7 +396,8 @@ class Sun(unittest.TestCase):
         self.assertGreater(slab.hour_ghi(noon, 52.5, 13.4, 0), 700)
         self.assertEqual(slab.hour_ghi(night, 52.5, 13.4, 0), 0.0)
         self.assertAlmostEqual(slab.cloud_factor(0), 1.0)
-        self.assertAlmostEqual(slab.cloud_factor(100), 0.48)
+        self.assertAlmostEqual(slab.cloud_factor(100), 0.25)
+        self.assertGreater(slab.cloud_factor(50), 0.9, "broken cloud keeps most of the sun")
         self.assertEqual(slab.cloud_factor(None), slab.cloud_factor(100))
         self.assertTrue(all(slab.cloud_factor(a) >= slab.cloud_factor(b) for a, b in zip(range(0, 100), range(1, 101))))
 

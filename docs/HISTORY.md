@@ -1,6 +1,6 @@
 # Project history and status
 
-Last reviewed: **2026-11-10**. Current source version: **0.6.2, experimental**: the
+Last reviewed: **2026-11-11**. Current source version: **0.6.3, experimental**: the
 slab thermostat ([CONTROLLER.md](CONTROLLER.md)) replaces the 0.4–0.5 predictive
 planner. The first house last ran 0.5.3 (installed by the owner through HACS). The
 sections below keep the record of each earlier stage as it was written.
@@ -120,8 +120,9 @@ downgrade of the legacy script. No intervening legacy releases are archived here
 - **Two-hold test** (UNIT_MODEL 7.2): alternate whole runs at 0 and 6.5 kW run output over
   4–6 similar mild days and compare metered efficiency; the energy half of the 0.6 gain
   depends on it.
-- **Sun estimate on met.no cloud:** check the cloud factor against the house's own PV once a
-  season of 0.6 data exists.
+- **Sun estimate on met.no cloud:** 0.6.3 moved to Kasten–Czeplak after a PV check on
+  Open-Meteo cloud; recheck against the house's PV on met.no cloud once a season of 0.6 data
+  exists.
 
 ### October 8 local correction: compressor cycles and floor memory
 
@@ -568,3 +569,21 @@ on-screen box, tap or sideways drag on a phone) and the dashboard now shows the 
 itself: floor estimate between its start and stop points with the heating runs shaded, on Home
 and on the Floor tab. Checked against 48 h of house data in a desktop and a phone-width page,
 including a card scaled to 0.8. [DASHBOARD.md](DASHBOARD.md#charts).
+
+### November 11 overcast sun — 0.6.3
+
+A cold morning on 11 Nov: the heating stopped at 01:19 local after a 10-hour evening run and
+restarted only at 08:12; the room fell from 22.3 to 21.2 °C. The floor target sagged from 27.4
+to 25.3 °C overnight while the room was cooling. The sun term was the largest part of it:
+the forecast said 100 % cloud and fog all day, but the cloud factor still credited 48 % of
+clear-sky sun, worth −2.3 K on the floor target. Yesterday's sunny overshoot (23.4 °C) had
+also taught the daily pattern and the integral to run cooler mornings.
+
+0.6.3 replaces the cloud factor with the Kasten–Czeplak law (overcast 0.25 instead of 0.48).
+The site's PV over Oct–Mar gives a median of 0.29 of a clear hour when the forecast says
+100 % cloud. Lab (season, four seeds, four variants): never worse than 0.6.2, overcast
+November mornings 0.34 → 0.29 K under target. Today's sun cut would have been about −1.2 K
+instead of −2.3 K. Details and the laws that were rejected: [CONTROLLER.md](CONTROLLER.md#sun).
+The learned integral and daily pattern carry over; they absorb the smaller sun credit within
+days.
+
